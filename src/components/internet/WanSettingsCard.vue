@@ -1,19 +1,21 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import HkIcon from '@/components/icons/HkIcon.vue'
 import M3Switch from '@/components/m3/M3Switch.vue'
 import SecretField from '@/components/m3/SecretField.vue'
 import SegmentedButton from '@/components/m3/SegmentedButton.vue'
-import { saveWan, type WanConfig } from '@/api/wan'
+import WanMacField from '@/components/internet/WanMacField.vue'
+import { saveWan, saveWanMac, wanMac, type WanConfig, type WanMac } from '@/api/wan'
 import type { UplinkView } from '@/utils/uplinks'
 import { useAction } from '@/composables/action'
 import { useConfirm } from '@/composables/confirm'
-import { dnsError, ipError, mtuError, netmaskError, parseList } from '@/utils/validate'
+import { dnsError, ipError, macError, mtuError, netmaskError, normalizeMac, parseList } from '@/utils/validate'
 import { duration } from '@/utils/format'
 
 // Wired WAN: how it connects (DHCP, PPPoE, static) and the few extras people
-// actually change (DNS, MTU, IPv6). Saving reconnects only the WAN; the LAN
-// and this page stay up, so no rollback timer is needed.
+// actually change (DNS, MTU, IPv6, and the MAC an ISP may insist on). Saving
+// reconnects only the WAN; the LAN and this page stay up, so no rollback
+// timer is needed.
 const props = defineProps<{ config: WanConfig | null; link: UplinkView | null }>()
 const emit = defineEmits<{ saved: [] }>()
 const { busy, run } = useAction()
@@ -22,11 +24,30 @@ const { ask } = useConfirm()
 const form = reactive({ proto: 'dhcp', username: '', password: '', ipaddr: '', netmask: '255.255.255.0', gateway: '', dns: '', mtu: '', ipv6: true })
 const advanced = ref(false)
 
+// The WAN port's MAC lives on its network device, not in the interface
+// settings the page hands this card, so the card reads it itself.
+const mac = ref<WanMac | null>(null)
+const macForm = reactive({ mode: 'own' as 'own' | 'custom', value: '' })
+async function loadMac(): Promise<void> {
+  mac.value = await wanMac()
+  resetMac()
+}
+function resetMac(): void {
+  macForm.mode = mac.value?.mac ? 'custom' : 'own'
+  macForm.value = mac.value?.mac ?? ''
+  if (mac.value?.mac) advanced.value = true
+}
+onMounted(loadMac)
+/** the MAC to save: "" for the port's own */
+const macNext = computed(() => (macForm.mode === 'custom' ? (normalizeMac(macForm.value) ?? '') : ''))
+const macDirty = computed(() => !!mac.value && macNext.value !== mac.value.mac)
+
 function reset(): void {
   const c = props.config
   if (!c) return
   Object.assign(form, { ...c, dns: c.dns.join(', ') })
-  advanced.value = !!(c.dns.length || c.mtu || !c.ipv6)
+  advanced.value = !!(c.dns.length || c.mtu || !c.ipv6 || mac.value?.mac)
+  resetMac()
 }
 watch(() => props.config, reset, { immediate: true })
 // Static needs DNS servers, which live in the collapsed section: open it so
@@ -45,6 +66,7 @@ const errors = computed(() => ({
   gateway: form.proto === 'static' ? ipError(form.gateway) : null,
   dns: form.dns.trim() ? dnsError(form.dns) : form.proto === 'static' ? 'Static needs at least one DNS server' : null,
   mtu: mtuError(form.mtu),
+  mac: macForm.mode === 'custom' && mac.value ? macError(macForm.value) : null,
 }))
 const valid = computed(() => Object.values(errors.value).every((e) => !e))
 
@@ -59,7 +81,7 @@ const next = computed<WanConfig>(() => ({
   mtu: form.mtu.trim(),
   ipv6: form.ipv6,
 }))
-const dirty = computed(() => {
+const wanDirty = computed(() => {
   const c = props.config
   if (!c) return false
   const n = next.value
@@ -69,17 +91,37 @@ const dirty = computed(() => {
   if (n.proto === 'static') return !(common && same(['ipaddr', 'netmask', 'gateway']))
   return !common
 })
+const dirty = computed(() => wanDirty.value || macDirty.value)
 
 async function save(): Promise<void> {
   const ok = await ask({
     title: 'Save wired WAN settings?',
     text:
       'The wired WAN reconnects with the new settings. If 5G is set up as a backup, multi-WAN switches to it until the wired link is back.' +
-      (form.proto !== props.config?.proto ? `\n\nSwitching to ${form.proto.toUpperCase()}: make sure your ISP expects it, or the wired link won't come up.` : ''),
+      (form.proto !== props.config?.proto ? `\n\nSwitching to ${form.proto.toUpperCase()}: make sure your ISP expects it, or the wired link won't come up.` : '') +
+      (macDirty.value
+        ? macNext.value
+          ? `\n\nThe WAN port takes the MAC ${macNext.value}. If your ISP only accepts a registered address, this has to be the one it has on file.`
+          : '\n\nThe WAN port goes back to its own MAC. If your ISP only accepts a registered address, the wired link may not come up.'
+        : ''),
     confirm: 'Save',
   })
   if (!ok) return
-  if (await run('save', () => saveWan(next.value), 'Wired WAN settings saved; reconnecting')) emit('saved')
+  // The MAC first, so the WAN asks for its lease (or dials) with the address
+  // the ISP expects.
+  const done = await run(
+    'save',
+    async () => {
+      if (macDirty.value && mac.value) await saveWanMac(mac.value, macNext.value)
+      if (wanDirty.value) await saveWan(next.value)
+    },
+    'Wired WAN settings saved; reconnecting',
+  )
+  // re-read only on success: a refused save keeps what was typed
+  if (done) {
+    await loadMac()
+    emit('saved')
+  }
 }
 </script>
 
@@ -126,7 +168,7 @@ async function save(): Promise<void> {
 
       <button type="button" class="hk-disclose" :aria-expanded="advanced ? 'true' : 'false'" @click="advanced = !advanced">
         <HkIcon name="arrowRight" :size="18" :style="{ transform: advanced ? 'rotate(90deg)' : 'none', transition: 'transform .2s' }" />
-        DNS, MTU and IPv6
+        DNS, MTU, IPv6 and MAC address
       </button>
       <v-expand-transition>
         <div v-show="advanced" class="d-flex flex-column ga-3">
@@ -145,6 +187,7 @@ async function save(): Promise<void> {
               <M3Switch v-model="form.ipv6" label="IPv6 on the wired WAN" />
             </div>
           </div>
+          <WanMacField v-if="mac" v-model:mode="macForm.mode" v-model:value="macForm.value" :wan="mac" :error="errors.mac" />
         </div>
       </v-expand-transition>
 

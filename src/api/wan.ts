@@ -3,6 +3,7 @@
 // restarts the interface whose config changed. A failed save reverts the
 // session's staged changes so a later apply can't pick up half of it.
 
+import { call } from './ubus'
 import * as uci from './uci'
 
 export type WanProto = 'dhcp' | 'pppoe' | 'static'
@@ -74,6 +75,55 @@ export async function saveWan(c: WanConfig): Promise<void> {
     if (!c.mtu) drop.push('mtu')
     if (!c.dns.length) drop.push('dns', 'peerdns')
     await uci.del('network', 'wan', drop)
+    await uci.commit('network')
+  })
+}
+
+// ---- the WAN port's MAC address ----
+
+export interface WanMac {
+  /** the WAN interface's device, e.g. "wan" */
+  device: string
+  /** the `config device` section for it, if there is one */
+  section: string | null
+  /** the address it's set to use ("AA:BB:..."), or "" for its own */
+  mac: string
+  /** the address it has right now */
+  current: string | null
+}
+
+/**
+ * The WAN port's MAC override. It lives on the device (a `config device`
+ * section named after it), not on the interface, so it holds for whichever
+ * protocol runs on the port - DHCP, PPPoE or static.
+ */
+export async function wanMac(): Promise<WanMac | null> {
+  try {
+    const v = await uci.getConfig('network')
+    const device = String(v.wan?.device ?? '')
+    if (!/^[A-Za-z0-9_.-]+$/.test(device)) return null
+    const sec = Object.values(v).find((s) => s['.type'] === 'device' && s.name === device)
+    const st = await call<{ macaddr?: string }>('network.device', 'status', { name: device }).catch(() => null)
+    return {
+      device,
+      section: sec?.['.name'] ?? null,
+      mac: sec?.macaddr ? String(sec.macaddr).toUpperCase() : '',
+      current: st?.macaddr ? st.macaddr.toUpperCase() : null,
+    }
+  } catch {
+    return null
+  }
+}
+
+/** Give the WAN port `mac`, or back its own with "". netifd re-applies the device, so the WAN reconnects. */
+export async function saveWanMac(w: WanMac, mac: string): Promise<void> {
+  await staged(['network'], async () => {
+    if (mac) {
+      if (w.section) await uci.set('network', w.section, { macaddr: mac })
+      else await call('uci', 'add', { config: 'network', type: 'device', values: { name: w.device, macaddr: mac } })
+    } else if (w.section) {
+      await uci.del('network', w.section, ['macaddr'])
+    }
     await uci.commit('network')
   })
 }

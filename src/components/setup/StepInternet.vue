@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import HkIcon from '@/components/icons/HkIcon.vue'
+import WanMacField from '@/components/internet/WanMacField.vue'
 import M3Switch from '@/components/m3/M3Switch.vue'
 import SecretField from '@/components/m3/SecretField.vue'
 import SegmentedButton from '@/components/m3/SegmentedButton.vue'
@@ -120,6 +121,7 @@ const v6 = computed({
       />
       <p class="hk-label mt-2" style="margin: 0">{{ s.draft.wan.ipv6 ? 'Asks the ISP for IPv6 as well; nothing is lost if it has none.' : 'IPv4 only, for an ISP whose IPv6 causes trouble.' }}</p>
     </div>
+    <WanMacField v-if="s.orig.wanMac" v-model:mode="s.draft.mac.mode" v-model:value="s.draft.mac.value" :wan="s.orig.wanMac" :error="e.mac" />
   </div>
 
   <div v-if="s.hasModem.value" class="hk-sec">

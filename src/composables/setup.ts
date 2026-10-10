@@ -17,11 +17,14 @@ import { computed, reactive, ref, watch } from 'vue'
 import * as uci from '@/api/uci'
 import * as sys from '@/api/system'
 import * as modem from '@/api/modem'
-import { multiwanFull, saveMultiwan, saveWan, setWanAsLan, wanConfig, wanPort, type MultiwanFull, type WanConfig, type WanPort } from '@/api/wan'
+import {
+  multiwanFull, saveMultiwan, saveWan, saveWanMac, setWanAsLan, wanConfig, wanMac, wanPort,
+  type MultiwanFull, type WanConfig, type WanMac, type WanPort,
+} from '@/api/wan'
 import { wifiRadios, type WifiRadio } from '@/api/wifi'
 import { markSetupDone, wanCarrier } from '@/api/setup'
 import { useSession } from '@/stores/session'
-import { dnsError, ipError, keyError, mtuError, netmaskError, parseList, ssidError } from '@/utils/validate'
+import { dnsError, ipError, keyError, macError, mtuError, netmaskError, normalizeMac, parseList, ssidError } from '@/utils/validate'
 import { countryByIso, guessCountry } from '@/utils/countries'
 
 export type StepId = 'welcome' | 'password' | 'system' | 'internet' | 'wifi' | 'review'
@@ -81,7 +84,9 @@ export function useSetup() {
     multiwan: null as MultiwanFull | null,
     ipv6: null as modem.Ipv6Info | null,
     wanPort: null as WanPort | null,
+    wanMac: null as WanMac | null,
   })
+
   // What the router is set up as now: standalone when multi-WAN has the wired
   // WAN turned off or puts 5G first.
   const origUsage = computed<Usage>(() => {
@@ -107,6 +112,8 @@ export function useSetup() {
     /** The 5G dial: v4only, dual (IPv4 + IPv6), v6only - or split, kept as it is. */
     v6style: 'dual',
     wan: { proto: 'dhcp', username: '', password: '', ipaddr: '', netmask: '255.255.255.0', gateway: '', dns: '', mtu: '', ipv6: true },
+    /** The WAN port's MAC: its own, or one the ISP has registered. */
+    mac: { mode: 'own' as 'own' | 'custom', value: '' },
     apn: { mode: 'auto', carrier: '', apn: '', auth: 'none', username: '', password: '', pdptype: '' } as ApnForm,
     wifi: { same: true, ssid: '', key: '', encryption: 'sae-mixed', bands: [] as BandForm[] },
   })
@@ -114,7 +121,7 @@ export function useSetup() {
   async function load(): Promise<void> {
     loading.value = true
     try {
-      const [s, z, w, r, p, m, c, mw, v6, wp] = await Promise.all([
+      const [s, z, w, r, p, m, c, mw, v6, wp, wm] = await Promise.all([
         sys.systemSettings().catch(() => null),
         sys.timezones().catch(() => ({})),
         wanConfig(),
@@ -125,8 +132,9 @@ export function useSetup() {
         multiwanFull().catch(() => null),
         hasModem.value ? modem.ipv6info().catch(() => null) : Promise.resolve(null),
         wanPort(),
+        wanMac(),
       ])
-      Object.assign(orig, { system: s, wan: w, radios: r, profile: p?.ok ? p : null, modem: m, multiwan: mw, ipv6: v6?.ok ? v6 : null, wanPort: wp })
+      Object.assign(orig, { system: s, wan: w, radios: r, profile: p?.ok ? p : null, modem: m, multiwan: mw, ipv6: v6?.ok ? v6 : null, wanPort: wp, wanMac: wm })
       carriers.value = orig.profile?.carriers ?? []
       zones.value = z
       carrier.value = c
@@ -161,6 +169,8 @@ export function useSetup() {
       draft.wanAsLan = origUsage.value === 'standalone' ? !!o.wanPort?.inLan : true
       draft.v6style = o.ipv6?.config.style || 'dual'
       if (o.wan) Object.assign(draft.wan, { ...o.wan, dns: o.wan.dns.join(', ') })
+      draft.mac.mode = o.wanMac?.mac ? 'custom' : 'own'
+      draft.mac.value = o.wanMac?.mac ?? ''
       const a = o.profile?.apn
       if (a) {
         Object.assign(draft.apn, {
@@ -218,7 +228,7 @@ export function useSetup() {
   const wanErrors = computed(() => {
     const w = draft.wan
     // 5G only: the wired settings are neither shown nor applied.
-    if (draft.usage === 'standalone' && hasUsage.value) return { username: null, ipaddr: null, netmask: null, gateway: null, dns: null, mtu: null }
+    if (draft.usage === 'standalone' && hasUsage.value) return { username: null, ipaddr: null, netmask: null, gateway: null, dns: null, mtu: null, mac: null }
     return {
       username: w.proto === 'pppoe' && !w.username.trim() ? 'Required' : null,
       ipaddr: w.proto === 'static' ? ipError(w.ipaddr) : null,
@@ -226,6 +236,7 @@ export function useSetup() {
       gateway: w.proto === 'static' ? ipError(w.gateway) : null,
       dns: w.dns.trim() ? dnsError(w.dns) : w.proto === 'static' ? 'Static needs a DNS server' : null,
       mtu: mtuError(w.mtu),
+      mac: draft.mac.mode === 'custom' && orig.wanMac ? macError(draft.mac.value) : null,
     }
   })
   const apnError = computed(() => {
@@ -262,6 +273,8 @@ export function useSetup() {
     mtu: draft.wan.mtu.trim(),
     ipv6: draft.wan.ipv6,
   }))
+  /** The MAC the WAN port should use: "" for its own. */
+  const macNext = computed(() => (draft.mac.mode === 'custom' ? (normalizeMac(draft.mac.value) ?? '') : ''))
   // Multi-WAN as the chosen use needs it: wired first with 5G behind it, or
   // 5G alone with the wired WAN left out. Balance mode is only replaced when
   // the choice actually changes (see changes.usage).
@@ -307,6 +320,7 @@ export function useSetup() {
       usage: hasUsage.value && draft.usage !== origUsage.value,
       lanPort,
       wan: !!wan && !standalone,
+      mac: !!o.wanMac && !standalone && macNext.value !== o.wanMac.mac,
       apn,
       ipv6: hasModem.value && !!o.ipv6 && draft.v6style !== (o.ipv6.config.style || 'dual'),
       country: !!draft.system.country && o.radios.some((r) => (r.country || '').toUpperCase() !== draft.system.country),
@@ -330,6 +344,18 @@ export function useSetup() {
         label: 'Name the router and set its time zone',
         state: 'pending',
         run: () => sys.saveSystem(s.section, draft.system.hostname, draft.system.zonename, zones.value[draft.system.zonename]?.tzstring ?? 'UTC0'),
+      })
+    }
+    // Before the wired settings, so the ISP sees the address it expects the
+    // first time the WAN asks for a lease or dials.
+    if (c.mac && orig.wanMac) {
+      const w = orig.wanMac
+      const mac = macNext.value
+      t.push({
+        id: 'mac',
+        label: mac ? `Give the WAN port the MAC ${mac}` : 'Give the WAN port back its own MAC',
+        state: 'pending',
+        run: () => saveWanMac(w, mac),
       })
     }
     if (c.wan) t.push({ id: 'wan', label: 'Connect the wired internet', state: 'pending', run: () => saveWan(wanNext.value) })
@@ -442,7 +468,7 @@ export function useSetup() {
 
   return {
     loading, loadError, load, fill, orig, zones, carrier, hasModem, hasUsage, carriers, draft,
-    passwordErrors, wanErrors, apnError, wifiErrors, valid, changes, wifiNext,
+    passwordErrors, wanErrors, apnError, wifiErrors, valid, changes, wifiNext, macNext,
     tasks, applying, finished, apply, retry,
   }
 }

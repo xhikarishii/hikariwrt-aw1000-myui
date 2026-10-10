@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { dnsError, ipError, keyError, mtuError, netmaskError, parseList, ssidError } from './validate'
+import { dnsError, ipError, keyError, macError, mtuError, netmaskError, normalizeMac, parseList, ssidError } from './validate'
 
 it('ip and netmask', () => {
   expect(ipError('192.168.88.1')).toBeNull()
@@ -39,4 +39,19 @@ it('generates readable passwords', async () => {
   expect(p).toHaveLength(12)
   expect(p).not.toMatch(/[0O1lI]/)
   expect(keyError(p, 'sae-mixed')).toBeNull()
+})
+
+it('reads MAC addresses in the usual spellings', () => {
+  expect(normalizeMac('00:11:46:e9:c5:9d')).toBe('00:11:46:E9:C5:9D')
+  expect(normalizeMac('00-11-46-E9-C5-9D')).toBe('00:11:46:E9:C5:9D')
+  expect(normalizeMac('0011.46e9.c59d')).toBe('00:11:46:E9:C5:9D')
+  expect(normalizeMac('00:11:46:e9:c5')).toBeNull()
+})
+
+it('accepts only unicast MACs for the WAN', () => {
+  expect(macError('00:11:46:E9:C5:9D')).toBeNull()
+  expect(macError('')).toBe('Required')
+  expect(macError('01:00:5e:00:00:01')).toMatch(/multicast/)
+  expect(macError('00:00:00:00:00:00')).toMatch(/usable/)
+  expect(macError('zz:11:22:33:44:55')).toMatch(/hex/)
 })

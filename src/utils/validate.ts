@@ -46,6 +46,27 @@ export function keyError(s: string, encryption: string): string | null {
   return /^[\x20-\x7e]+$/.test(s) ? null : 'Letters, digits and ASCII symbols only'
 }
 
+/** "aa-bb-cc-dd-ee-ff" or "aabb.ccdd.eeff" -> "AA:BB:CC:DD:EE:FF"; null if it isn't a MAC. */
+export function normalizeMac(s: string): string | null {
+  const hex = s.trim().replace(/[:.\-\s]/g, '')
+  if (!/^[0-9a-fA-F]{12}$/.test(hex)) return null
+  return hex.toUpperCase().match(/../g)!.join(':')
+}
+
+/**
+ * A MAC a WAN port may take: six hex pairs, not all zeros, and unicast (a
+ * multicast address - the lowest bit of the first byte set - is never a
+ * device's own, and no ISP would hand out a lease to it).
+ */
+export function macError(s: string): string | null {
+  if (!s.trim()) return 'Required'
+  const m = normalizeMac(s)
+  if (!m) return 'Six pairs of hex digits, like 00:11:22:AA:BB:CC'
+  if (m === '00:00:00:00:00:00') return 'Not a usable address'
+  if (parseInt(m.slice(0, 2), 16) & 1) return 'That’s a multicast address; the first pair has to be even'
+  return null
+}
+
 export function mtuError(s: string): string | null {
   if (!s.trim()) return null
   const n = Number(s)

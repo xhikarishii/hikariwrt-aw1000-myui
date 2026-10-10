@@ -50,8 +50,8 @@ const rows = computed<Row[]>(() => {
     r.push({
       icon: 'ethernet',
       title: 'Cable internet',
-      value: `${PROTO[d.wan.proto] ?? d.wan.proto}${d.wan.proto === 'pppoe' ? ` as ${d.wan.username}` : d.wan.proto === 'static' ? ` ${d.wan.ipaddr}` : ''} · ${d.wan.ipv6 ? 'IPv4 + IPv6' : 'IPv4'}`,
-      changed: c.wan,
+      value: `${PROTO[d.wan.proto] ?? d.wan.proto}${d.wan.proto === 'pppoe' ? ` as ${d.wan.username}` : d.wan.proto === 'static' ? ` ${d.wan.ipaddr}` : ''} · ${d.wan.ipv6 ? 'IPv4 + IPv6' : 'IPv4'}${s.orig.wanMac ? ` · ${s.macNext.value ? `MAC ${s.macNext.value}` : 'its own MAC'}` : ''}`,
+      changed: c.wan || c.mac,
       step: 'internet',
     })
   if (s.hasModem.value) {
