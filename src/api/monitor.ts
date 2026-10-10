@@ -187,3 +187,89 @@ export const sigseries = (range: Range) => call<SignalSeries>('luci.aw1000-monit
 export const sigevents = (range: Range) => call<{ ok: boolean; range: Range; changes: SignalChange[] }>('luci.aw1000-monitor', 'sigevents', { range })
 /** Save the signal history to storage now (when it's kept there). */
 export const sigflush = () => call<{ ok: boolean; error?: string }>('luci.aw1000-monitor', 'sigflush')
+
+// ---- websites (Monitoring -> Sites) ----
+
+/** One check: an HTTP ping (or the gateway's ICMP ping). */
+export interface SiteResult {
+  ts: number
+  ok: boolean
+  /** HTTP status; null for the gateway or without an answer */
+  code: number | null
+  /** ms from the request to its first answer (DNS and TLS left out) */
+  latency: number | null
+  /** ms for the TCP connect alone */
+  connect: number | null
+}
+
+export interface SiteWan {
+  name: string
+  label: string
+  iface_disabled: boolean
+  /** It checks the sites. */
+  sites: boolean
+  action: 'none' | 'restart' | 'restart_reboot'
+  /** minutes with no site answering before the action */
+  after: number
+  /** null before the first check */
+  link: boolean | null
+  dark_since: number | null
+  last_action: number | null
+  restarts: number | null
+  gateway: { addr: string; last: SiteResult | null } | null
+  results: Record<string, SiteResult>
+}
+
+export interface SitesStatus {
+  ok: boolean
+  running: boolean
+  clock_ok: boolean
+  now: number
+  enabled: boolean
+  /** seconds between checks */
+  interval: number
+  timeout: number
+  retain_days: number
+  max_reboots: number
+  boot_grace: number
+  reboots_24h: number
+  dryrun: boolean
+  /** when the last check finished */
+  checked: number | null
+  /** bytes a day the checks cost */
+  estimate: number
+  persist: Persist
+  storage: StorageOption[]
+  /** `icon`: a file under /aw1000-site-icons/, or null for a letter tile */
+  sites: { id: string; site: string; host: string; url: string; icon: string | null }[]
+  wans: SiteWan[]
+}
+
+export interface SitesSeries {
+  ok: boolean
+  site: string
+  range: Range
+  from: number
+  to: number
+  step: number
+  /** rtt is the response time; loss the share of checks that failed */
+  wans: WanSeries[]
+}
+
+export interface SiteAction {
+  ts: number
+  wan: string
+  label: string | null
+  action: 'restart' | 'reboot' | 'recovered' | 'skipped'
+  detail: string
+}
+
+export const sitestatus = () => call<SitesStatus>('luci.aw1000-monitor', 'sitestatus')
+/** site: an id, 'gw' for the gateway, or 'all' (every site summed per WAN) */
+export const sitesseries = (site: string, range: Range) => call<SitesSeries>('luci.aw1000-monitor', 'sitesseries', { site, range })
+export const siteevents = (range: Range) => call<{ ok: boolean; range: Range; actions: SiteAction[] }>('luci.aw1000-monitor', 'siteevents', { range })
+/** Starts a check on the router and returns at once; watch `checked` in sitestatus. */
+export const sitecheck = () => call<{ ok: boolean; started?: number; error?: string }>('luci.aw1000-monitor', 'sitecheck')
+export const siteaction = (wan: string, action: 'restart' | 'reboot') =>
+  call<{ ok: boolean; error?: string }>('luci.aw1000-monitor', 'siteaction', { wan, action })
+export const siteflush = () => call<{ ok: boolean; error?: string }>('luci.aw1000-monitor', 'siteflush')

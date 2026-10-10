@@ -15,6 +15,7 @@ const props = defineProps<{ signal: boolean }>()
 const { busy, run } = useAction()
 
 const up = usePoll(() => monitor.status(), 30000)
+const site = usePoll(() => monitor.sitestatus().catch(() => null), 30000)
 const sig = usePoll(() => (props.signal ? monitor.sigstatus() : Promise.resolve(null)), 30000)
 
 const EVERY: Record<number, string> = { 1800: '30 minutes', 3600: 'hour', 21600: '6 hours', 43200: '12 hours', 86400: 'day', 604800: '7 days' }
@@ -22,7 +23,7 @@ const KIND = { flash: 'the router’s internal flash', usb: 'router storage on U
 const keep = (d: number) => (d === 730 ? '2 years' : d === 365 ? '1 year' : `${d} days`)
 
 interface Card {
-  key: 'uptime' | 'signal'
+  key: 'uptime' | 'sites' | 'signal'
   title: string
   what: string
   p: Persist
@@ -36,6 +37,9 @@ const cards = computed<Card[]>(() => {
   const u = up.data.value
   if (u?.ok)
     out.push({ key: 'uptime', title: 'Uptime history', what: 'Latency, loss, traffic and outages for each WAN', p: u.persist, retain: u.retain_days, sub: '', flush: monitor.flush })
+  const w = site.data.value
+  if (w?.ok)
+    out.push({ key: 'sites', title: 'Sites history', what: 'How fast each site answered over each WAN, and the restarts and reboots', p: w.persist, retain: w.retain_days, sub: '/site-checks', flush: monitor.siteflush })
   const s = sig.data.value
   if (s?.ok && s.modem)
     out.push({ key: 'signal', title: 'Signal history', what: 'The 5G modem’s readings, bands and cell changes', p: s.persist, retain: s.retain_days, sub: '/modem-signal', flush: monitor.sigflush })
@@ -43,7 +47,7 @@ const cards = computed<Card[]>(() => {
 })
 
 async function saveNow(c: Card): Promise<void> {
-  if (await run(c.key, c.flush, `${c.title} saved`)) await (c.key === 'uptime' ? up.refresh() : sig.refresh())
+  if (await run(c.key, c.flush, `${c.title} saved`)) await (c.key === 'uptime' ? up.refresh() : c.key === 'sites' ? site.refresh() : sig.refresh())
 }
 </script>
 

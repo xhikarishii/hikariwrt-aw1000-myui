@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import PageHeader from '@/components/PageHeader.vue'
 import HkIcon from '@/components/icons/HkIcon.vue'
 import SignalTab from '@/components/monitor/tabs/SignalTab.vue'
+import SitesTab from '@/components/monitor/tabs/SitesTab.vue'
 import StorageTab from '@/components/monitor/tabs/StorageTab.vue'
 import UptimeTab from '@/components/monitor/tabs/UptimeTab.vue'
 import * as monitor from '@/api/monitor'
@@ -11,8 +12,9 @@ import { luciUrl } from '@/nav'
 import '@/styles/monitor.css'
 
 // Monitoring, in the tabs LuCI's Monitoring menu has: Uptime (per WAN),
-// Signal (the 5G modem's, when the modem package is installed) and Storage
-// (where each history is kept). Each tab's Settings button opens its LuCI
+// Sites (how fast websites answer over each WAN), Signal (the 5G modem's,
+// when the modem package is installed) and Storage (where each history is
+// kept). Each tab's Settings button opens its LuCI
 // page, where those settings live.
 const route = useRoute()
 const router = useRouter()
@@ -26,6 +28,7 @@ onMounted(async () => {
 
 const TABS = computed(() => [
   { id: 'uptime', title: 'Uptime', luci: 'admin/monitoring/uptime', overline: 'Uptime, latency, loss and traffic per WAN' },
+  { id: 'sites', title: 'Sites', luci: 'admin/monitoring/sites', overline: 'How fast websites answer over each WAN' },
   ...(hasModem.value !== false ? [{ id: 'signal', title: 'Signal', luci: 'admin/monitoring/signal', overline: 'The 5G modem’s signal over time' }] : []),
   { id: 'storage', title: 'Storage', luci: 'admin/monitoring/storage', overline: 'Where the monitoring history is kept' },
 ])
@@ -66,6 +69,7 @@ function pick(id: string): void {
   </div>
 
   <UptimeTab v-if="tab.id === 'uptime'" />
+  <SitesTab v-else-if="tab.id === 'sites'" />
   <SignalTab v-else-if="tab.id === 'signal'" />
   <StorageTab v-else-if="tab.id === 'storage'" :signal="hasModem !== false" />
 </template>

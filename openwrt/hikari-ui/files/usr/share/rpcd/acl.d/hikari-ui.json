@@ -65,7 +65,10 @@
 					"events",
 					"sigstatus",
 					"sigseries",
-					"sigevents"
+					"sigevents",
+					"sitestatus",
+					"sitesseries",
+					"siteevents"
 				],
 				"luci.aw1000-mesh": [
 					"status",
@@ -182,7 +185,10 @@
 				],
 				"luci.aw1000-monitor": [
 					"flush",
-					"sigflush"
+					"sigflush",
+					"siteflush",
+					"sitecheck",
+					"siteaction"
 				],
 				"system": [
 					"reboot",
