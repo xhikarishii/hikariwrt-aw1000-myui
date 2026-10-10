@@ -17,6 +17,14 @@ export interface ChartSeries {
   band?: [(number | null)[], (number | null)[]]
 }
 
+/** A band of y shaded behind the lines (null = open-ended), e.g. a quality grade. */
+export interface ChartZone {
+  from: number | null
+  to: number | null
+  color: string
+  label?: string
+}
+
 const props = withDefaults(
   defineProps<{
     ts: number[]
@@ -27,12 +35,18 @@ const props = withDefaults(
     height?: number
     /** At least this much on the y axis. */
     yMax?: number
+    /** Fit the y axis to the data at both ends (readings below zero, like
+     *  dBm) instead of starting at 0; yMin / yMax then only widen it, and are
+     *  the range shown with no data. */
+    fit?: boolean
+    yMin?: number
+    zones?: ChartZone[]
     fmtY?: (v: number) => string
     fmtVal?: (v: number) => string
     label: string
     empty?: string
   }>(),
-  { height: 180, yMax: 0, fmtY: (v: number) => String(v), fmtVal: undefined, empty: 'No data for this period yet' },
+  { height: 180, yMax: undefined, yMin: undefined, zones: () => [], fmtY: (v: number) => String(v), fmtVal: undefined, empty: 'No data for this period yet' },
 )
 
 const box = ref<HTMLElement | null>(null)
@@ -55,8 +69,33 @@ const PAD = { l: 46, r: 10, t: 8, b: 22 }
 const innerW = computed(() => Math.max(width.value - PAD.l - PAD.r, 10))
 const innerH = computed(() => props.height - PAD.t - PAD.b)
 const any = computed(() => props.series.some((s) => s.values.some((v) => v != null)))
-const yt = computed(() =>
-  niceTicks(0, Math.max(props.yMax, maxOf(...props.series.flatMap((s) => [s.values, s.band?.[1]]))), props.height < 150 ? 3 : 4),
+const yt = computed(() => {
+  const count = props.height < 150 ? 3 : 4
+  if (!props.fit) return niceTicks(0, Math.max(props.yMax ?? 0, maxOf(...props.series.flatMap((s) => [s.values, s.band?.[1]]))), count)
+  let lo = Infinity
+  let hi = -Infinity
+  for (const s of props.series)
+    for (const a of [s.values, s.band?.[0], s.band?.[1]])
+      for (const v of a ?? [])
+        if (v != null) {
+          lo = Math.min(lo, v)
+          hi = Math.max(hi, v)
+        }
+  if (props.yMin != null) lo = Math.min(lo, props.yMin)
+  if (props.yMax != null) hi = Math.max(hi, props.yMax)
+  if (!Number.isFinite(lo)) lo = 0
+  if (!Number.isFinite(hi)) hi = lo + 1
+  return niceTicks(lo, hi, count)
+})
+// zones clipped to the axis
+const zoneRects = computed(() =>
+  props.zones
+    .map((z) => {
+      const a = Math.max(z.from ?? yt.value.min, yt.value.min)
+      const b = Math.min(z.to ?? yt.value.max, yt.value.max)
+      return b > a ? { y: y(b), h: y(a) - y(b), color: z.color, label: z.label } : null
+    })
+    .filter((z) => z != null),
 )
 const half = computed(() => props.step / 2)
 const x = (t: number) => PAD.l + ((t + half.value - props.from) / (props.to - props.from || 1)) * innerW.value
@@ -129,6 +168,9 @@ const tip = computed(() => {
 <template>
   <div ref="box" class="hk-lc">
     <svg :width="width" :height="height" :viewBox="`0 0 ${width} ${height}`" role="img" :aria-label="label" @pointermove="onMove" @pointerdown="onMove" @pointerleave="hover = null">
+      <rect v-for="(z, k) in zoneRects" :key="`z${k}`" class="hk-lc__zone" :x="PAD.l" :width="innerW" :y="z.y" :height="z.h" :fill="z.color">
+        <title v-if="z.label">{{ z.label }}</title>
+      </rect>
       <g v-for="v in yt.ticks" :key="v">
         <line class="hk-lc__grid" :x1="PAD.l" :x2="width - PAD.r" :y1="Math.round(y(v)) + 0.5" :y2="Math.round(y(v)) + 0.5" />
         <text class="hk-lc__axis" :x="PAD.l - 6" :y="Math.round(y(v)) + 4" text-anchor="end">{{ fmtY(v) }}</text>
@@ -206,6 +248,9 @@ const tip = computed(() => {
 }
 .hk-lc__band {
   opacity: 0.18;
+}
+.hk-lc__zone {
+  opacity: 0.1;
 }
 .hk-lc__cross {
   stroke: rgb(var(--v-theme-on-surface-muted));

@@ -1,10 +1,12 @@
-// Internet uptime and quality via luci.aw1000-monitor (aw1000-monitor in the
-// hikariwrt feed). The collector keeps the history; this only reads it.
-// Settings (targets, thresholds, USB history) are changed on the LuCI page.
+// Internet uptime and quality, and the 5G modem's signal over time, via
+// luci.aw1000-monitor (aw1000-monitor in the hikariwrt feed). The collector
+// keeps the history; this reads it and can ask for a save now. Settings
+// (targets, thresholds, intervals, where history is kept) are changed on the
+// LuCI pages under Monitoring.
 
 import { call } from './ubus'
 
-export type Range = '1h' | '24h' | '7d' | '30d' | '90d' | '365d'
+export type Range = '1h' | '3h' | '6h' | '12h' | '24h' | '7d' | '30d' | '90d' | '365d'
 
 export interface MonitorWan {
   name: string
@@ -29,6 +31,29 @@ export interface MonitorWan {
   uptime: { '24h': number | null; '7d': number | null; '30d': number | null }
 }
 
+/** Where a history is kept beyond RAM; the same shape for uptime and signal. */
+export interface Persist {
+  enabled: boolean
+  /** "router" (the router's own storage) or a drive's mountpoint */
+  target: string | null
+  /** null while the chosen drive isn't mounted */
+  path: string | null
+  /** flash: the router's internal flash; usb: router storage on USB (extroot); drive: a mounted drive */
+  kind?: 'flash' | 'usb' | 'drive' | null
+  days: number
+  /** seconds between saves (also saved on shutdown) */
+  flush_interval?: number
+  last_flush: number | null
+  error: string | null
+}
+
+export interface StorageOption {
+  id: string
+  label: string
+  path: string
+  kind?: 'flash' | 'usb' | 'drive'
+}
+
 export interface MonitorStatus {
   ok: boolean
   running: boolean
@@ -39,8 +64,8 @@ export interface MonitorStatus {
   degraded_loss: number
   degraded_rtt: number
   retain_days: number
-  persist: { enabled: boolean; target: string | null; path: string | null; days: number; last_flush: number | null; error: string | null }
-  storage: { id: string; label: string; path: string }[]
+  persist: Persist
+  storage: StorageOption[]
   wans: MonitorWan[]
 }
 
@@ -86,3 +111,79 @@ export interface Outage {
 export const status = () => call<MonitorStatus>('luci.aw1000-monitor', 'status')
 export const series = (range: Range, wan = 'all') => call<Series>('luci.aw1000-monitor', 'series', { wan, range })
 export const events = (range: Range) => call<{ ok: boolean; range: Range; events: Outage[] }>('luci.aw1000-monitor', 'events', { range })
+
+/** Save the uptime history to storage now (when it's kept there). */
+export const flush = () => call<{ ok: boolean; error?: string }>('luci.aw1000-monitor', 'flush')
+
+// ---- the modem's signal (Monitoring -> Signal) ----
+
+export type SignalMode = 'sa' | 'nsa' | 'lte' | 'none'
+
+export interface SignalReading {
+  band: string | null
+  pci: number | null
+  arfcn: number | null
+  rsrp: number | null
+  rsrq: number | null
+  sinr: number | null
+  rssi?: number | null
+}
+
+export interface SignalStatus {
+  ok: boolean
+  /** The modem package is installed. */
+  modem: boolean
+  running: boolean
+  clock_ok: boolean
+  now: number
+  enabled: boolean
+  /** Seconds between readings. */
+  interval: number
+  retain_days: number
+  /** The RSRP window (dBm) aw1000-modem grades by, per radio. */
+  rsrp_window: { lte: [number, number]; nr: [number, number] }
+  persist: Persist
+  storage: StorageOption[]
+  last: { ts: number; mode: SignalMode; ca: number | null; cell: string | null; lte: SignalReading; nr: SignalReading } | null
+}
+
+/** Mode per bucket: 0 no data, 1 5G SA, 2 5G NSA, 3 LTE, 4 no service. */
+export type ModeState = 0 | 1 | 2 | 3 | 4
+
+export type SignalMetric = 'lte_rsrp' | 'lte_rsrq' | 'lte_sinr' | 'lte_rssi' | 'nr_rsrp' | 'nr_rsrq' | 'nr_sinr'
+
+type Values = (number | null)[]
+
+export type SignalSeries = {
+  ok: boolean
+  range: Range
+  from: number
+  to: number
+  step: number
+  ts: number[]
+  mode: ModeState[]
+  /** The most used band in each bucket. */
+  lband: (string | null)[]
+  nband: (string | null)[]
+  /** Average number of aggregated carriers. */
+  ca: Values
+  summary: {
+    samples: number
+    /** Share of the period in each mode, %. */
+    modes: Record<SignalMode, number> | null
+    bands: { lte: { band: string; share: number }[]; nr: { band: string; share: number }[] }
+  } & Record<SignalMetric, { avg: number; min: number; max: number } | null>
+} & Record<SignalMetric | `${SignalMetric}_min` | `${SignalMetric}_max`, Values>
+
+export interface SignalChange {
+  ts: number
+  kind: 'mode' | 'lte_band' | 'lte_cell' | 'nr_band' | 'nr_cell'
+  from: string
+  to: string
+}
+
+export const sigstatus = () => call<SignalStatus>('luci.aw1000-monitor', 'sigstatus')
+export const sigseries = (range: Range) => call<SignalSeries>('luci.aw1000-monitor', 'sigseries', { range })
+export const sigevents = (range: Range) => call<{ ok: boolean; range: Range; changes: SignalChange[] }>('luci.aw1000-monitor', 'sigevents', { range })
+/** Save the signal history to storage now (when it's kept there). */
+export const sigflush = () => call<{ ok: boolean; error?: string }>('luci.aw1000-monitor', 'sigflush')

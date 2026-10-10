@@ -29,6 +29,10 @@ export interface ModemBand {
   bandwidth: number | null
   pci: number | null
   arfcn: number | null
+  rssi?: number | null
+  rsrp?: number | null
+  rsrq?: number | null
+  sinr?: number | null
 }
 
 export interface ModemStatus {
@@ -52,7 +56,10 @@ export interface ModemStatus {
   tac?: string
   gnb_id_bits?: number
   error?: string | null
+  /** The cell carrying the connection: the LTE anchor, or the NR cell in SA. */
   signal?: ModemSignal | null
+  /** The NR leg of 5G NSA; null otherwise. */
+  signal_nr?: ModemSignal | null
   ca?: { lte: number; nr: number; total: number; active: boolean }
   bands?: ModemBand[]
   identity?: { imei: string | null; imsi: string | null; iccid: string | null; msisdn: string | null }
@@ -159,7 +166,22 @@ export interface UsageInfo {
     sms_number: string | null
     action: string
     retain_days: number
+    /** seconds between saves of the running count */
+    flush_interval?: number
   }
+  /** Where the daily history is kept (aw1000-modem-usage). */
+  persist?: {
+    /** "router" (/etc/aw1000-usage) or a drive's mountpoint */
+    target: string
+    kind: 'flash' | 'usb' | 'drive'
+    /** the file, or "" while the chosen drive isn't mounted */
+    path: string
+    available: boolean
+    flush_interval: number
+    flush_bytes: number
+  }
+  storage?: { id: string; label: string; path: string; kind: 'flash' | 'usb' | 'drive' }[]
+  recorded?: { days: number; first: string; last: string }
   period: { start: string; end: string; next: string; days: number; elapsed: number; left: number }
   cycle: {
     rx: number
@@ -383,6 +405,10 @@ export const usageSet = (p: {
   sms_number: string
   action: 'none' | 'disconnect'
   retain_days: number
+  /** "router" or a mountpoint; left out, the router keeps its choice */
+  persist_target?: string
+  /** 1800, 3600, 21600, 43200 or 86400; left out, the router keeps its choice */
+  flush_interval?: number
 }) =>
   call<UsageInfo & { error?: string }>('luci.aw1000-modem', 'usageset', {
     enabled: p.enabled ? '1' : '0',
@@ -394,6 +420,8 @@ export const usageSet = (p: {
     sms_number: p.sms_number,
     action: p.action,
     retain_days: String(p.retain_days),
+    persist_target: p.persist_target ?? '',
+    flush_interval: p.flush_interval ? String(p.flush_interval) : '',
   })
 /** period zeroes this billing period; all deletes every recorded day. */
 export const usageReset = (what: 'period' | 'all') => call<UsageInfo & { error?: string }>('luci.aw1000-modem', 'usagereset', { what })

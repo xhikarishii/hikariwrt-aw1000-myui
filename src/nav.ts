@@ -24,7 +24,7 @@ export interface NavItem {
 export const NAV: NavItem[] = [
   { name: 'home', path: '/', title: 'Home', icon: 'home', primary: true, phase: 0, luci: 'admin/status/overview', keywords: 'dashboard overview status' },
   { name: 'internet', path: '/internet', title: 'Internet', icon: 'internet', phase: 0, luci: 'admin/network/multiwan', keywords: 'wan pppoe multi-wan failover load balance' },
-  { name: 'monitoring', path: '/monitoring', title: 'Monitoring', icon: 'chart', phase: 0, luci: 'admin/status/monitoring', requires: 'luci.aw1000-monitor', keywords: 'uptime latency ping packet loss jitter outage quality traffic usage' },
+  { name: 'monitoring', path: '/monitoring', title: 'Monitoring', icon: 'chart', phase: 0, luci: 'admin/monitoring/uptime', requires: 'luci.aw1000-monitor', keywords: 'uptime latency ping packet loss jitter outage quality traffic usage signal rsrp rsrq sinr rssi band cell 5g lte history storage' },
   { name: 'cellular', path: '/cellular', title: 'Cellular', icon: 'cellular', primary: true, phase: 0, luci: 'admin/modem/status', requires: 'luci.aw1000-modem', keywords: '5g lte modem signal sim' },
   { name: 'wifi', path: '/wifi', title: 'Wireless', icon: 'wifi', phase: 0, luci: 'admin/network/wireless', keywords: 'wi-fi wifi ssid password 5 ghz 2.4 ghz guest' },
   { name: 'clients', path: '/clients', title: 'Clients', icon: 'clients', primary: true, phase: 0, luci: 'admin/network/dhcp', keywords: 'devices dhcp leases' },

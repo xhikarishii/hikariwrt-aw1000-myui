@@ -11,7 +11,9 @@ import { bytes } from '@/utils/format'
 
 // 5G data usage from aw1000-modem-usage (sampled on the router, so it counts
 // every device, not just this browser). Every usage write answers with the
-// full usage reply, which replaces ours.
+// full usage reply, which replaces ours. The daily history is kept on the
+// router's storage or a drive; saves append, so even the internal flash only
+// sees a short line per save.
 const { busy, run } = useAction()
 const { ask } = useConfirm()
 
@@ -36,6 +38,8 @@ const form = reactive({
   sms_notify: false,
   sms_number: '',
   retain_days: 400,
+  persist_target: 'router',
+  flush_interval: 1800,
 })
 watch(
   u,
@@ -52,10 +56,34 @@ watch(
       sms_notify: s.sms_notify,
       sms_number: s.sms_number ?? '',
       retain_days: s.retain_days,
+      persist_target: v.persist?.target ?? 'router',
+      flush_interval: s.flush_interval ?? 1800,
     })
   },
   { immediate: true },
 )
+
+// Where the history can go: the router's storage and any mounted drive; a
+// chosen drive that's unplugged right now stays the choice.
+const SAVE_EVERY = [
+  { value: 1800, title: 'Every 30 minutes' },
+  { value: 3600, title: 'Every hour' },
+  { value: 21600, title: 'Every 6 hours' },
+  { value: 43200, title: 'Every 12 hours' },
+  { value: 86400, title: 'Once a day' },
+]
+const places = computed(() => {
+  const list = (u.value?.storage ?? []).map((s) => ({ value: s.id, title: s.label, kind: s.kind as string }))
+  const t = u.value?.persist?.target
+  if (t && !list.some((p) => p.value === t)) list.push({ value: t, title: `${t} (not mounted)`, kind: 'drive' })
+  return list
+})
+const everyItems = computed(() =>
+  SAVE_EVERY.some((e) => e.value === form.flush_interval)
+    ? SAVE_EVERY
+    : [...SAVE_EVERY, { value: form.flush_interval, title: `Every ${Math.round(form.flush_interval / 60)} minutes` }],
+)
+const onFlash = computed(() => places.value.find((p) => p.value === form.persist_target)?.kind === 'flash')
 
 const limited = computed(() => (u.value?.settings.limit ?? 0) > 0)
 // Days of this billing period, oldest first (the reply is newest first).
@@ -96,7 +124,59 @@ async function save(): Promise<void> {
     })
     if (!ok) return
   }
-  await run('save', async () => take(await modem.usageSet({ ...form, limit: lim, sms_number: form.sms_number.trim() })), 'Usage settings saved')
+  // the history settings go back as the router has them: they're saved (and
+  // a move confirmed) from the History card
+  const v = u.value
+  await run(
+    'save',
+    async () =>
+      take(
+        await modem.usageSet({
+          ...form,
+          limit: lim,
+          sms_number: form.sms_number.trim(),
+          retain_days: v?.settings.retain_days ?? form.retain_days,
+          persist_target: v?.persist?.target,
+          flush_interval: v?.settings.flush_interval,
+        }),
+      ),
+    'Usage settings saved',
+  )
+}
+
+async function saveHistory(): Promise<void> {
+  const d = Number(form.retain_days)
+  if (!Number.isInteger(d) || d < 1 || d > 3650) return void run('history', async () => ({ ok: false, error: 'Keep 1 to 3650 days.' }))
+  const moving = form.persist_target !== (u.value?.persist?.target ?? 'router')
+  if (moving) {
+    const ok = await ask({
+      title: 'Move the usage history?',
+      text: 'The recorded days move to the new place, with today as counted so far, and are removed from the old one.',
+      confirm: 'Move',
+    })
+    if (!ok) return
+  }
+  const s = u.value!.settings
+  await run(
+    'history',
+    async () =>
+      take(
+        await modem.usageSet({
+          enabled: u.value!.enabled,
+          limit: s.limit_value ? String(s.limit_value) : '0',
+          unit: s.unit,
+          reset_day: s.reset_day,
+          warn_percent: s.warn_percent,
+          sms_notify: s.sms_notify,
+          sms_number: s.sms_number ?? '',
+          action: s.action === 'disconnect' ? 'disconnect' : 'none',
+          retain_days: d,
+          persist_target: form.persist_target,
+          flush_interval: form.flush_interval,
+        }),
+      ),
+    moving ? 'History moved' : 'History settings saved',
+  )
 }
 
 async function reset(what: 'period' | 'all'): Promise<void> {
@@ -114,6 +194,10 @@ const resume = () => run('resume', async () => take(await modem.usageResume()), 
 
 <template>
   <v-alert v-if="error" type="error" variant="tonal" rounded="xl">{{ error }}</v-alert>
+  <v-alert v-if="u?.persist && !u.persist.available" type="error" variant="tonal" rounded="xl">
+    The drive the history is kept on ({{ u.persist.target }}) isn’t mounted, so nothing can be saved and the days before today are missing from these figures.
+    Counting carries on in memory until it’s back, or until the router restarts. Plug it back in, or choose another place under History.
+  </v-alert>
 
   <div class="hk-grid-3 hk-usage">
     <section class="hk-card hk-usage__main" aria-label="This period">
@@ -191,6 +275,33 @@ const resume = () => run('resume', async () => take(await modem.usageResume()), 
         <v-btn variant="flat" color="primary" height="40" :loading="busy.save" :disabled="!u" @click="save">Save</v-btn>
       </div>
     </section>
+
+    <section class="hk-card hk-usage__wide" aria-label="History" style="gap: 14px">
+      <div class="d-flex flex-column">
+        <h2 class="hk-h2">History</h2>
+        <span class="text-muted" style="font-size: 13px">
+          <template v-if="u?.recorded?.days">{{ u.recorded.days }} days recorded, {{ u.recorded.first }} to {{ u.recorded.last }}. </template>
+          <template v-if="u?.persist?.path">Kept in {{ u.persist.path }}.</template>
+        </span>
+      </div>
+      <div class="hk-usage__form">
+        <v-select v-model="form.persist_target" :items="places" item-value="value" item-title="title" label="Where" hide-details :disabled="!u" />
+        <v-select v-model="form.flush_interval" :items="everyItems" item-value="value" item-title="title" label="Save" hide-details :disabled="!u" />
+        <v-text-field v-model.number="form.retain_days" type="number" min="1" max="3650" label="Keep (days)" hide-details :disabled="!u" />
+      </div>
+      <v-alert v-if="onFlash" type="warning" variant="tonal" rounded="lg" density="compact">
+        This writes to the router’s internal flash, which wears with writes. Each save adds one short line and the file is rewritten once a week, so even every
+        30 minutes is a few kilobytes a day. Whatever was counted since the last save is lost if the power fails; a reboot or shutdown saves it first.
+      </v-alert>
+      <span class="text-muted" style="font-size: 13px">
+        The router’s storage survives reboots and firmware upgrades; a factory reset clears it. A USB drive, SD card or NVMe mounted on the router is listed too,
+        but if it’s missing when the router starts, the earlier days are missing from the allowance until it’s back. A busy link saves sooner, after every
+        gigabyte.
+      </span>
+      <div class="d-flex justify-end">
+        <v-btn variant="flat" color="primary" height="40" :loading="busy.history" :disabled="!u" @click="saveHistory">Save</v-btn>
+      </div>
+    </section>
   </div>
 </template>
 
@@ -198,11 +309,25 @@ const resume = () => run('resume', async () => take(await modem.usageResume()), 
 .hk-usage__main {
   grid-column: span 2;
 }
+.hk-usage__wide {
+  grid-column: 1 / -1;
+}
+.hk-usage__form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+@media (max-width: 839.98px) {
+  .hk-usage__form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 @media (max-width: 1279.98px) {
   .hk-usage {
     grid-template-columns: minmax(0, 1fr);
   }
-  .hk-usage__main {
+  .hk-usage__main,
+  .hk-usage__wide {
     grid-column: auto;
   }
 }

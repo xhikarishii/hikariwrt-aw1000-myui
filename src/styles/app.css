@@ -219,3 +219,51 @@ button.hk-link {
   font-family: inherit;
   cursor: pointer;
 }
+
+/* Page tabs (Cellular, Monitoring): a scrolling row under the header, the
+ * chosen one underlined in primary. */
+.hk-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid rgb(var(--v-theme-outline-variant));
+  overflow-x: auto;
+  scrollbar-width: none;
+  margin-top: -4px;
+}
+.hk-tab {
+  height: 48px;
+  padding: 0 16px;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: rgb(var(--v-theme-on-surface-muted));
+  white-space: nowrap;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.hk-tab span {
+  padding-bottom: 12px;
+  border-bottom: 3px solid transparent;
+  margin-bottom: -1px;
+}
+.hk-tab.is-on {
+  color: rgb(var(--v-theme-primary));
+  font-weight: 700;
+}
+.hk-tab.is-on span {
+  padding-bottom: 12px;
+  border-bottom-color: rgb(var(--v-theme-primary));
+  border-radius: 3px 3px 0 0;
+}
+.hk-tab:hover {
+  background: rgba(var(--v-theme-on-surface), 0.04);
+}
+.hk-tab:focus-visible {
+  outline: 3px solid rgb(var(--v-theme-secondary));
+  outline-offset: -3px;
+}

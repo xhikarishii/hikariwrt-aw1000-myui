@@ -1,0 +1,141 @@
+/* Monitoring tabs (Uptime, Signal, Storage): what they share. Scoped under
+ * .hk-mon, the tabs' root, so these names don't reach other pages that have
+ * their own .hk-dot or .hk-filter. The root is display: contents, so its
+ * children sit in the page's own column and keep its spacing. */
+.hk-mon {
+  display: contents;
+}
+.hk-mon .hk-mon-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 20px;
+}
+.hk-mon .hk-mon-range {
+  min-width: 260px;
+}
+.hk-mon .hk-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid rgb(var(--v-theme-outline-variant));
+  border-radius: 8px;
+  background: transparent;
+  color: rgb(var(--v-theme-on-surface-muted));
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.hk-mon .hk-filter.is-on {
+  border-color: transparent;
+  background: rgb(var(--v-theme-secondary-container));
+  color: rgb(var(--v-theme-on-secondary-container));
+}
+.hk-mon .hk-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: none;
+}
+.hk-mon .hk-dot--lg {
+  width: 14px;
+  height: 14px;
+}
+.hk-mon .hk-mon-health {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+  gap: 16px;
+}
+.hk-mon .hk-mon-tiles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+.hk-mon .hk-mon-val {
+  font-size: 22px;
+  white-space: nowrap;
+}
+.hk-mon .hk-mon-val.is-good {
+  color: rgb(var(--v-theme-success));
+}
+.hk-mon .hk-mon-val.is-fair {
+  color: rgb(var(--v-theme-warning));
+}
+.hk-mon .hk-mon-val.is-poor {
+  color: rgb(var(--v-theme-error));
+}
+.hk-mon .hk-mon-live {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  font-size: 13px;
+}
+.hk-mon .hk-mon-live b {
+  color: rgb(var(--v-theme-on-surface));
+  font-weight: 600;
+}
+.hk-mon .hk-state--up {
+  background: rgb(var(--v-theme-success-container));
+  color: rgb(var(--v-theme-on-success-container));
+}
+.hk-mon .hk-state--degraded {
+  background: rgb(var(--v-theme-warning-container));
+  color: rgb(var(--v-theme-on-warning-container));
+}
+.hk-mon .hk-state--down {
+  background: rgb(var(--v-theme-error-container));
+  color: rgb(var(--v-theme-on-error-container));
+}
+.hk-mon .hk-state--off {
+  border-color: rgb(var(--v-theme-outline-variant));
+  color: rgb(var(--v-theme-on-surface-muted));
+}
+.hk-mon .hk-mon-charts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+.hk-mon .hk-mon-charts.is-two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.hk-mon .hk-mon-wide {
+  grid-column: 1 / -1;
+}
+.hk-mon .hk-mon-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+.hk-mon .hk-mon-outage {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: rgb(var(--v-theme-surface-container-lowest));
+}
+@media (max-width: 1279.98px) {
+  .hk-mon .hk-mon-charts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 839.98px) {
+  .hk-mon .hk-mon-charts,
+  .hk-mon .hk-mon-charts.is-two,
+  .hk-mon .hk-mon-health {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 599.98px) {
+  .hk-mon .hk-mon-tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .hk-mon .hk-mon-range {
+    min-width: 0;
+    width: 100%;
+  }
+}
