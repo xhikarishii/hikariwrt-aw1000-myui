@@ -72,25 +72,35 @@ import java.util.Map;
 /**
  * HikariWrt for Android: the router's web UI in a full-screen WebView.
  *
- * Three screens in one activity, swapped inside `content`:
+ * Two screens in one activity, swapped inside `content`:
  *   setup   first launch (or "Change router address"): the user types the
  *           router's address; this network's gateway is offered as a
  *           suggestion only. Connect checks it really is a HikariWrt router
- *           before it is saved.
- *   web     the WebView on http(s)://<router>/webui/.
- *   error   the saved router didn't answer: Retry, or change the address.
+ *           before it is saved. It is also where a lost connection lands:
+ *           the saved address filled in, what went wrong, and a retry every
+ *           few seconds that carries on by itself once the router answers.
+ *   web     the WebView on http(s)://<router>/webui/. While it is showing, a
+ *           watchdog checks the router still answers (and at once when the
+ *           phone's network changes or the app comes back to the front).
  *
  * What a plain WebView doesn't do by itself, and the web UI relies on, is
  * handled here: the file pickers (backup restore, firmware, WireGuard import),
  * links that belong outside the app, a router that moved to a new LAN address,
  * a self-signed HTTPS certificate, and - through window.HikariApp - tinting
- * the system bars to the UI's colours, the clipboard, and the backup download
- * (a form POST, which a WebView DownloadListener can't repeat).
+ * the system bars to the UI's colours, the clipboard, the backup download
+ * (a form POST, which a WebView DownloadListener can't repeat), and "Remember
+ * me": the sign-in, sealed by the Keystore (Vault), for the login page to use
+ * when the app is opened again.
  */
 public class MainActivity extends Activity {
     static final String ACTION_SETUP = "moe.hikarishii.hikariwrt.SETUP";
     private static final int REQ_FILE = 1;
     private static final String PREF_ADDRESS = "address";
+    private static final String PREF_LOGIN = "login";
+    /** The watchdog's pace while the router answers. */
+    private static final long PROBE_MS = 15000;
+    /** Missed answers before the connection counts as lost: about 15 s, or 8 min while the UI waits for a restart. */
+    private static final int LOST_AFTER = 3, LOST_AFTER_WAITING = 32;
 
     private SharedPreferences prefs;
     private Pins pins;
@@ -100,13 +110,21 @@ public class MainActivity extends Activity {
     private View navStrip;        // behind the navigation bar, sized to it
     private FrameLayout content;  // padded clear of the bars and the keyboard
     private WebView web;
-    private View setupView, errorView;
+    private View setupView;
 
     private volatile RouterAddress router;
     /** Origin of the page now in the WebView, checked by every bridge call. */
     private volatile String pageUrl = "";
     private ValueCallback<Uri[]> fileCallback;
     private boolean webLoaded;
+
+    private boolean resumed, probing;
+    private int probeFails;
+    /** Set by the web UI while it waits for a restart or firmware upgrade it started. */
+    private volatile boolean waiting;
+    /** Bumped whenever the screen changes: ends the setup screen's retry loop. */
+    private int screen;
+    private ConnectivityManager.NetworkCallback netCallback;
 
     // ------------------------------------------------------------ lifecycle --
 
@@ -143,6 +161,45 @@ public class MainActivity extends Activity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         if (ACTION_SETUP.equals(intent.getAction())) showSetup();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        resumed = true;
+        // Back from the background, maybe on another network: check at once.
+        watch(300);
+        netCallback = new ConnectivityManager.NetworkCallback() {
+            @Override
+            public void onAvailable(Network n) {
+                ui.post(() -> watch(1500));
+            }
+
+            @Override
+            public void onLost(Network n) {
+                ui.post(() -> watch(500));
+            }
+        };
+        try {
+            getSystemService(ConnectivityManager.class).registerDefaultNetworkCallback(netCallback);
+        } catch (Exception e) {
+            netCallback = null; // the periodic check still runs
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        resumed = false;
+        ui.removeCallbacks(probe);
+        if (netCallback != null) {
+            try {
+                getSystemService(ConnectivityManager.class).unregisterNetworkCallback(netCallback);
+            } catch (Exception e) {
+                // not registered
+            }
+            netCallback = null;
+        }
+        super.onPause();
     }
 
     @Override
@@ -262,6 +319,7 @@ public class MainActivity extends Activity {
     }
 
     private void show(View v) {
+        screen++;
         content.removeAllViews();
         content.addView(v, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         root.requestApplyInsets();
@@ -289,6 +347,16 @@ public class MainActivity extends Activity {
     }
 
     private void showSetup() {
+        showSetup(null, false);
+    }
+
+    /**
+     * The address form. With a `problem` it says what went wrong with the
+     * saved address; with `retry` it also keeps trying that address every few
+     * seconds and goes back to the UI once it answers - until the user edits
+     * the address or leaves the screen.
+     */
+    private void showSetup(String problem, boolean retry) {
         barsForNative();
         int pad = dp(28);
         int muted = themeColor(android.R.attr.textColorSecondary, Color.GRAY);
@@ -311,7 +379,13 @@ public class MainActivity extends Activity {
         col.addView(title);
 
         TextView lead = new TextView(this);
-        lead.setText("Enter your router’s address to connect. It’s the address you open the router’s settings at, for example 192.168.1.1.");
+        if (problem != null && router != null) {
+            title.setText("Can’t reach the router");
+            lead.setText("Lost the connection to " + router.display() + ". Check that this phone is on the router’s Wi-Fi or LAN. "
+                    + "If the router has a new address, enter it below.");
+        } else {
+            lead.setText("Enter your router’s address to connect. It’s the address you open the router’s settings at, for example 192.168.1.1.");
+        }
         lead.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
         lead.setTextColor(muted);
         lead.setGravity(Gravity.CENTER);
@@ -351,6 +425,10 @@ public class MainActivity extends Activity {
         final TextView status = new TextView(this);
         status.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
         status.setPadding(0, dp(8), 0, dp(8));
+        if (problem != null) {
+            status.setTextColor(Color.rgb(0xBA, 0x1A, 0x1A));
+            status.setText(retry ? "No answer (" + problem + "). Trying again every few seconds…" : problem);
+        }
         col.addView(status, fullWidth());
 
         final ProgressBar busy = new ProgressBar(this);
@@ -392,7 +470,27 @@ public class MainActivity extends Activity {
         sv.addView(center);
         setupView = sv;
         show(sv);
-        field.requestFocus();
+        if (problem == null) field.requestFocus();
+        if (retry && router != null) retry(screen, router, field.getText().toString(), field, connect, go);
+    }
+
+    /** The lost-connection retry: Connect by itself once the router answers again. */
+    private void retry(int on, RouterAddress a, String typed, EditText field, Button connect, Runnable go) {
+        ui.postDelayed(() -> {
+            if (on != screen || !typed.equals(field.getText().toString())) return;
+            if (!connect.isEnabled()) {
+                retry(on, a, typed, field, connect, go);
+                return;
+            }
+            new Thread(() -> {
+                final boolean up = Net.reach(a, pins) == null;
+                ui.post(() -> {
+                    if (on != screen || !typed.equals(field.getText().toString())) return;
+                    if (up && connect.isEnabled()) go.run();
+                    else retry(on, a, typed, field, connect, go);
+                });
+            }).start();
+        }, 5000);
     }
 
     private LinearLayout.LayoutParams fullWidth() {
@@ -478,46 +576,54 @@ public class MainActivity extends Activity {
                 .show();
     }
 
-    // ---------------------------------------------------------------- error --
+    // ------------------------------------------------------------- watchdog --
 
-    private void showError(String why) {
-        barsForNative();
-        int pad = dp(28);
-        LinearLayout col = new LinearLayout(this);
-        col.setOrientation(LinearLayout.VERTICAL);
-        col.setGravity(Gravity.CENTER);
-        col.setPadding(pad, pad, pad, pad);
+    private final Runnable probe = this::probe;
 
-        TextView t = new TextView(this);
-        t.setText("Can’t reach the router");
-        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24);
-        t.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        t.setGravity(Gravity.CENTER);
-        col.addView(t);
+    /** (Re)schedule the next check, `delay` ms from now. */
+    private void watch(long delay) {
+        ui.removeCallbacks(probe);
+        if (resumed) ui.postDelayed(probe, delay);
+    }
 
-        TextView m = new TextView(this);
-        m.setText((router != null ? router.display() + " didn’t answer. " : "")
-                + "Check that this phone is on the router’s Wi-Fi or LAN." + (why != null && !why.isEmpty() ? "\n(" + why + ")" : ""));
-        m.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
-        m.setTextColor(themeColor(android.R.attr.textColorSecondary, Color.GRAY));
-        m.setGravity(Gravity.CENTER);
-        m.setPadding(0, dp(8), 0, dp(20));
-        col.addView(m);
+    /**
+     * Does the router still answer? Only while the UI is showing: a few
+     * missed answers in a row (quickly re-checked) count as a lost connection,
+     * which goes back to the address form. While the UI says it is waiting
+     * for the router to restart, minutes of silence are expected.
+     */
+    private void probe() {
+        final RouterAddress a = router;
+        if (!resumed || probing || a == null || web == null || web.getParent() == null || !webLoaded) {
+            watch(PROBE_MS);
+            return;
+        }
+        probing = true;
+        new Thread(() -> {
+            final String why = Net.reach(a, pins);
+            ui.post(() -> {
+                probing = false;
+                if (a != router || web == null || web.getParent() == null || !webLoaded) {
+                    probeFails = 0;
+                    watch(PROBE_MS);
+                } else if (why == null) {
+                    probeFails = 0;
+                    watch(PROBE_MS);
+                } else if (++probeFails >= (waiting ? LOST_AFTER_WAITING : LOST_AFTER)) {
+                    lost(why);
+                } else {
+                    watch(waiting ? PROBE_MS : 3000);
+                }
+            });
+        }).start();
+    }
 
-        Button retry = new Button(this);
-        retry.setAllCaps(false);
-        retry.setText("Retry");
-        retry.setOnClickListener(v -> showWeb(null));
-        col.addView(retry, new LinearLayout.LayoutParams(dp(240), ViewGroup.LayoutParams.WRAP_CONTENT));
-
-        Button change = new Button(this, null, android.R.attr.borderlessButtonStyle);
-        change.setAllCaps(false);
-        change.setText("Change router address");
-        change.setOnClickListener(v -> showSetup());
-        col.addView(change, new LinearLayout.LayoutParams(dp(240), ViewGroup.LayoutParams.WRAP_CONTENT));
-
-        errorView = col;
-        show(col);
+    /** Back to the address form; the UI is loaded afresh once connected again. */
+    private void lost(String why) {
+        probeFails = 0;
+        waiting = false;
+        webLoaded = false;
+        showSetup(why != null && !why.isEmpty() ? why : "no answer", true);
     }
 
     // ------------------------------------------------------------------ web --
@@ -561,6 +667,7 @@ public class MainActivity extends Activity {
             @Override
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
                 pageUrl = url;
+                waiting = false;
             }
 
             @Override
@@ -584,7 +691,9 @@ public class MainActivity extends Activity {
                 // and remember the new address for the next launch.
                 if (req.isForMainFrame() && (scheme.equals("http") || scheme.equals("https"))
                         && RouterAddress.isPrivateV4(u.getHost()) && (path.equals("/") || path.isEmpty() || path.startsWith("/webui"))) {
-                    router = new RouterAddress(scheme, u.getHost(), u.getPort());
+                    RouterAddress moved = new RouterAddress(scheme, u.getHost(), u.getPort());
+                    rekeyLogin(router, moved);
+                    router = moved;
                     prefs.edit().putString(PREF_ADDRESS, router.base()).apply();
                     return false;
                 }
@@ -594,14 +703,15 @@ public class MainActivity extends Activity {
 
             @Override
             public void onReceivedError(WebView view, WebResourceRequest req, WebResourceError error) {
-                if (req.isForMainFrame()) showError(String.valueOf(error.getDescription()));
+                if (req.isForMainFrame() && view == web && view.getParent() != null) lost(String.valueOf(error.getDescription()));
             }
 
             @Override
             public void onReceivedHttpError(WebView view, WebResourceRequest req, WebResourceResponse res) {
                 if (req.isForMainFrame() && res.getStatusCode() == 404 && req.getUrl().getPath() != null
                         && req.getUrl().getPath().startsWith("/webui")) {
-                    showError("the router has no HikariWrt web UI at /webui/");
+                    webLoaded = false;
+                    showSetup(router.display() + " answers, but the HikariWrt web UI isn’t installed on it (nothing at /webui/).", false);
                 }
             }
 
@@ -707,6 +817,21 @@ public class MainActivity extends Activity {
             startActivity(new Intent(Intent.ACTION_VIEW, u).addCategory(Intent.CATEGORY_BROWSABLE));
         } catch (ActivityNotFoundException e) {
             toast("No app can open " + u);
+        }
+    }
+
+    /** The router moved to a new address (the UI's own link): the saved sign-in moves with it. */
+    private void rekeyLogin(RouterAddress from, RouterAddress to) {
+        String s = prefs.getString(PREF_LOGIN, null);
+        if (s == null || from == null) return;
+        try {
+            JSONObject o = new JSONObject(Vault.open(s));
+            if (from.base().equals(o.optString("router"))) {
+                o.put("router", to.base());
+                prefs.edit().putString(PREF_LOGIN, Vault.seal(o.toString())).apply();
+            }
+        } catch (Exception e) {
+            prefs.edit().remove(PREF_LOGIN).apply();
         }
     }
 
@@ -820,6 +945,56 @@ public class MainActivity extends Activity {
             saveToDownloads(path, fields, filename != null ? filename : "download",
                     gz ? "application/gzip" : "application/octet-stream", gz ? new byte[] {0x1f, (byte) 0x8b} : null);
             return true;
+        }
+
+        /**
+         * "Remember me" on the login page: keep this sign-in, sealed by the
+         * Keystore and tied to this router's address, so opening the app signs
+         * in again by itself.
+         */
+        @JavascriptInterface
+        public boolean saveLogin(String user, String password) {
+            RouterAddress r = router;
+            if (!fromRouter() || r == null || user == null || password == null) return false;
+            try {
+                JSONObject o = new JSONObject().put("router", r.base()).put("user", user).put("password", password);
+                prefs.edit().putString(PREF_LOGIN, Vault.seal(o.toString())).apply();
+                return true;
+            } catch (Exception e) {
+                return false;
+            }
+        }
+
+        /** The remembered sign-in for this router as {"user","password"} JSON, or "". */
+        @JavascriptInterface
+        public String savedLogin() {
+            RouterAddress r = router;
+            String s = prefs.getString(PREF_LOGIN, null);
+            if (!fromRouter() || r == null || s == null) return "";
+            try {
+                JSONObject o = new JSONObject(Vault.open(s));
+                if (!r.base().equals(o.optString("router"))) return "";
+                return new JSONObject().put("user", o.getString("user")).put("password", o.getString("password")).toString();
+            } catch (Exception e) {
+                // The Keystore key is gone (a reset lock screen can do that): nothing to offer.
+                prefs.edit().remove(PREF_LOGIN).apply();
+                return "";
+            }
+        }
+
+        /** Sign out, untick "Remember me", or a saved password that stopped working. */
+        @JavascriptInterface
+        public void forgetLogin() {
+            if (fromRouter()) prefs.edit().remove(PREF_LOGIN).apply();
+        }
+
+        /**
+         * The UI is waiting for a restart or firmware upgrade it started: the
+         * router is meant to be away for minutes, so the watchdog holds off.
+         */
+        @JavascriptInterface
+        public void waiting(boolean on) {
+            if (fromRouter()) waiting = on;
         }
     }
 }

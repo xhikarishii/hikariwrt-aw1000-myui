@@ -105,6 +105,28 @@ final class Net {
     }
 
     /**
+     * The connection watchdog's probe: does anything answer at the router's
+     * address? Any HTTP reply counts, so a busy router isn't mistaken for a
+     * lost one. Null when it answered, else why not.
+     */
+    static String reach(RouterAddress a, Pins pins) {
+        HttpURLConnection c = null;
+        try {
+            c = open(a, pins, "/webui/");
+            c.setConnectTimeout(4000);
+            c.setReadTimeout(4000);
+            c.setRequestMethod("HEAD");
+            c.getResponseCode();
+            return null;
+        } catch (IOException e) {
+            if (untrusted(e) != null) return "the router’s certificate changed";
+            return e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+        } finally {
+            if (c != null) c.disconnect();
+        }
+    }
+
+    /**
      * Fetch a file the web UI asked for and stream it to `out`: a form POST
      * when `fields` is given (the backup, which cgi-backup only hands out to a
      * POST carrying the session id), else a GET.

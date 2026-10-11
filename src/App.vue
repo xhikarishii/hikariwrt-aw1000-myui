@@ -7,7 +7,7 @@ import { useAppearance } from '@/stores/appearance'
 import { useSession } from '@/stores/session'
 import { buildThemes } from '@/theme/material'
 import { useNotify } from '@/composables/notify'
-import { setBars } from '@/utils/app'
+import { savedLogin, setBars } from '@/utils/app'
 import { useAppearanceSync } from '@/composables/appearanceSync'
 import ConfirmHost from '@/components/ConfirmHost.vue'
 import SpeedTestDialog from '@/components/SpeedTestDialog.vue'
@@ -61,7 +61,8 @@ watch(
 onSessionExpired(() => {
   if (!session.sid) return
   session.forget()
-  notify.show('Your session expired. Please sign in again.')
+  // With a remembered sign-in, the login page signs straight back in.
+  if (!savedLogin()) notify.show('Your session expired. Please sign in again.')
   router.replace({ name: 'login', query: { next: router.currentRoute.value.fullPath } })
 })
 </script>

@@ -7,6 +7,8 @@ import { blankPasswordLogin } from '@/api/setup'
 import { luciUrl } from '@/nav'
 import { useSession } from '@/stores/session'
 import HkIcon from '@/components/icons/HkIcon.vue'
+import M3Switch from '@/components/m3/M3Switch.vue'
+import { canRemember, rememberLogin, savedLogin } from '@/utils/app'
 
 const session = useSession()
 const router = useRouter()
@@ -18,6 +20,11 @@ const reveal = ref(false)
 const otherUser = ref(false)
 const busy = ref(false)
 const error = ref('')
+// "Remember me": the Android app only, which keeps the sign-in sealed by the
+// phone's Keystore and hands it back here when the app is opened again.
+const rememberable = canRemember()
+const remember = ref(false)
+const auto = ref(false)
 
 // A fresh or reset router has no root password, and rpcd then accepts any
 // login. Try a blank one once: if it works, skip the form and go to setup.
@@ -30,23 +37,37 @@ onMounted(async () => {
     if (session.loggedIn) return void router.replace({ name: 'setup' })
   }
   checking.value = false
+  const saved = savedLogin()
+  if (saved) {
+    username.value = saved.user
+    otherUser.value = saved.user !== 'root'
+    remember.value = true
+    auto.value = true
+    await submit(saved.password)
+    auto.value = false
+  }
 })
 
-async function submit(): Promise<void> {
+async function submit(pass = password.value): Promise<void> {
   if (busy.value) return
   busy.value = true
   error.value = ''
+  const user = username.value.trim() || 'root'
   try {
-    await session.login(username.value.trim() || 'root', password.value)
+    await session.login(user, pass)
+    if (rememberable) rememberLogin(remember.value ? { user, password: pass } : null)
     password.value = ''
     const next = typeof route.query.next === 'string' ? route.query.next : '/'
     router.replace(next)
   } catch (e) {
     // rpcd answers a wrong user/password with Permission denied (6).
-    error.value =
-      e instanceof UbusError && e.code === 6
-        ? 'That password is not correct.'
-        : `Can't reach the router (${e instanceof Error ? e.message : String(e)}).`
+    const wrong = e instanceof UbusError && e.code === 6
+    if (wrong && auto.value) rememberLogin(null)
+    error.value = wrong
+      ? auto.value
+        ? 'The saved password no longer works. Enter it again.'
+        : 'That password is not correct.'
+      : `Can't reach the router (${e instanceof Error ? e.message : String(e)}).`
   } finally {
     busy.value = false
   }
@@ -61,11 +82,11 @@ async function submit(): Promise<void> {
         <h1 class="hk-h1 mt-8 mb-1">Sign in</h1>
         <p class="text-body-large text-muted mb-8">Arcadyan AW1000 · enter the router's admin password.</p>
 
-        <div v-if="checking" class="d-flex align-center ga-3 py-4">
+        <div v-if="checking || auto" class="d-flex align-center ga-3 py-4">
           <v-progress-circular indeterminate size="20" width="2" color="primary" />
-          <span class="text-muted" style="font-size: 14px">Checking the router…</span>
+          <span class="text-muted" style="font-size: 14px">{{ auto ? `Signing in as ${username}…` : 'Checking the router…' }}</span>
         </div>
-        <v-form v-else @submit.prevent="submit">
+        <v-form v-else @submit.prevent="submit()">
           <v-expand-transition>
             <v-text-field v-if="otherUser" v-model="username" label="Username" autocomplete="username" class="mb-2" />
           </v-expand-transition>
@@ -83,6 +104,13 @@ async function submit(): Promise<void> {
               </v-btn>
             </template>
           </v-text-field>
+          <div v-if="rememberable" class="d-flex align-center ga-3 mt-2">
+            <div class="d-flex flex-column flex-grow-1">
+              <span style="font-size: 15px">Remember me</span>
+              <span class="hk-label">Signs in by itself when the app opens. Kept on this phone only.</span>
+            </div>
+            <M3Switch v-model="remember" label="Remember me" />
+          </div>
           <div class="d-flex align-center mt-4 ga-2">
             <v-btn variant="text" size="large" @click="otherUser = !otherUser">
               {{ otherUser ? 'Use root' : 'Other user' }}

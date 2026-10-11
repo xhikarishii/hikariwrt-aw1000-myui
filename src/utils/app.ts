@@ -10,6 +10,15 @@ interface HikariAppBridge {
   copy(text: string): boolean
   /** A download made as a form POST (the backup), saved natively into Downloads. */
   download(path: string, fieldsJson: string, filename: string): boolean
+  // "Remember me" and the connection watchdog: newer app builds only, so
+  // each is checked for before use.
+  /** Keep this sign-in (sealed by the phone's Keystore) for when the app is opened again. */
+  saveLogin?(user: string, password: string): boolean
+  /** The remembered sign-in for this router as {"user","password"} JSON, or "". */
+  savedLogin?(): string
+  forgetLogin?(): void
+  /** The router is meant to be away for a while (restart, firmware): don't treat it as a lost connection. */
+  waiting?(on: boolean): void
 }
 
 function bridge(): HikariAppBridge | null {
@@ -46,6 +55,35 @@ export function setBars(top: string, bottom: string, dark: boolean): void {
 export function appDownload(path: string, fields: Record<string, string>, filename: string): boolean {
   const b = bridge()
   return b ? b.download(path, JSON.stringify(fields), filename) : false
+}
+
+/** The app can remember the sign-in. */
+export function canRemember(): boolean {
+  return typeof bridge()?.saveLogin === 'function'
+}
+
+/** Remember (or, with null, forget) this sign-in in the app. */
+export function rememberLogin(login: { user: string; password: string } | null): void {
+  const b = bridge()
+  if (login) b?.saveLogin?.(login.user, login.password)
+  else b?.forgetLogin?.()
+}
+
+/** The sign-in the app remembers for this router, if any. */
+export function savedLogin(): { user: string; password: string } | null {
+  try {
+    const raw = bridge()?.savedLogin?.()
+    if (!raw) return null
+    const o = JSON.parse(raw) as { user?: unknown; password?: unknown }
+    return typeof o.user === 'string' && typeof o.password === 'string' ? { user: o.user, password: o.password } : null
+  } catch {
+    return null
+  }
+}
+
+/** Tell the app the router is meant to be unreachable for a while (or no longer). */
+export function appWaiting(on: boolean): void {
+  bridge()?.waiting?.(on)
 }
 
 /** An Android phone's browser (not the app): where offering the app makes sense. */

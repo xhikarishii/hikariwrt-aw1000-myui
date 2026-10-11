@@ -1,5 +1,7 @@
 // Login state. The rpcd session id is the only credential the browser
-// holds; the password is sent once to session.login and never stored.
+// holds; the password is sent once to session.login and never stored. (In
+// the Android app, "Remember me" keeps it - in the app, sealed by the phone's
+// Keystore, not in the page's storage.)
 
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
@@ -7,6 +9,7 @@ import { call, listObjects, login as ubusLogin, setSession } from '@/api/ubus'
 import { board as fetchBoard, type Board } from '@/api/router'
 import { setupDone as fetchSetupDone } from '@/api/setup'
 import { load, remove, save } from '@/utils/storage'
+import { rememberLogin } from '@/utils/app'
 
 const KEY = 'hikari.session'
 
@@ -68,7 +71,9 @@ export const useSession = defineStore('session', () => {
     // that's fine. The hikari-ui rpcd ACL grants session.destroy; stock
     // ACLs don't, so without the package installed the session just idles
     // out on the router.
+    // Signing out also ends the app's "Remember me": it would sign straight back in.
     const old = sid.value
+    rememberLogin(null)
     forget()
     if (old) await call('session', 'destroy', {}, { sid: old }).catch(() => undefined)
   }

@@ -3,10 +3,12 @@ import { onBeforeUnmount, ref, watch } from 'vue'
 import BrandMark from '@/components/BrandMark.vue'
 import { useSession } from '@/stores/session'
 import { useUi } from '@/stores/ui'
+import { appWaiting } from '@/utils/app'
 
 // Shown while the router restarts. Waits until it has gone away and come
 // back (a reply from uhttpd), then sends you to sign in: rpcd sessions live
-// in RAM, so the old one is gone after any reboot.
+// in RAM, so the old one is gone after any reboot. The Android app is told,
+// so its connection watchdog lets the router be away for those minutes.
 const ui = useUi()
 const session = useSession()
 const seconds = ref(0)
@@ -30,6 +32,7 @@ watch(
   () => ui.offline,
   (o) => {
     clearInterval(timer)
+    appWaiting(!!o)
     if (!o) return
     seconds.value = 0
     back.value = false
