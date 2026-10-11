@@ -112,7 +112,7 @@ export const status = () => call<MonitorStatus>('luci.aw1000-monitor', 'status')
 export const series = (range: Range, wan = 'all') => call<Series>('luci.aw1000-monitor', 'series', { wan, range })
 export const events = (range: Range) => call<{ ok: boolean; range: Range; events: Outage[] }>('luci.aw1000-monitor', 'events', { range })
 
-/** Save the uptime history to storage now (when it's kept there). */
+/** Save every monitor's history to storage now (when it's kept there). */
 export const flush = () => call<{ ok: boolean; error?: string }>('luci.aw1000-monitor', 'flush')
 
 // ---- the modem's signal (Monitoring -> Signal) ----
@@ -185,8 +185,6 @@ export interface SignalChange {
 export const sigstatus = () => call<SignalStatus>('luci.aw1000-monitor', 'sigstatus')
 export const sigseries = (range: Range) => call<SignalSeries>('luci.aw1000-monitor', 'sigseries', { range })
 export const sigevents = (range: Range) => call<{ ok: boolean; range: Range; changes: SignalChange[] }>('luci.aw1000-monitor', 'sigevents', { range })
-/** Save the signal history to storage now (when it's kept there). */
-export const sigflush = () => call<{ ok: boolean; error?: string }>('luci.aw1000-monitor', 'sigflush')
 
 // ---- websites (Monitoring -> Sites) ----
 
@@ -272,4 +270,18 @@ export const siteevents = (range: Range) => call<{ ok: boolean; range: Range; ac
 export const sitecheck = () => call<{ ok: boolean; started?: number; error?: string }>('luci.aw1000-monitor', 'sitecheck')
 export const siteaction = (wan: string, action: 'restart' | 'reboot') =>
   call<{ ok: boolean; error?: string }>('luci.aw1000-monitor', 'siteaction', { wan, action })
-export const siteflush = () => call<{ ok: boolean; error?: string }>('luci.aw1000-monitor', 'siteflush')
+
+// ---- one storage setting for every monitor ----
+
+export interface StorageInfo {
+  ok: boolean
+  retain_days: number
+  /** the setting itself; last_flush and error are per history, below */
+  persist: Omit<Persist, 'last_flush' | 'error'>
+  storage: StorageOption[]
+  /** the histories running now */
+  histories: { id: 'uptime' | 'sites' | 'signal' | 'clients'; name: string; last_flush: number | null; error: string | null; kb: number }[]
+}
+
+/** Where every monitor's history is kept, and what each has saved. */
+export const storage = () => call<StorageInfo>('luci.aw1000-monitor', 'storage')

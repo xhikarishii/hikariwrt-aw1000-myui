@@ -61,6 +61,7 @@
 				],
 				"luci.aw1000-monitor": [
 					"status",
+					"storage",
 					"series",
 					"events",
 					"sigstatus",
@@ -68,7 +69,9 @@
 					"sigevents",
 					"sitestatus",
 					"sitesseries",
-					"siteevents"
+					"siteevents",
+					"clientstats",
+					"clienthistory"
 				],
 				"luci.aw1000-mesh": [
 					"status",
@@ -185,8 +188,6 @@
 				],
 				"luci.aw1000-monitor": [
 					"flush",
-					"sigflush",
-					"siteflush",
 					"sitecheck",
 					"siteaction"
 				],

@@ -71,5 +71,5 @@ function pick(id: string): void {
   <UptimeTab v-if="tab.id === 'uptime'" />
   <SitesTab v-else-if="tab.id === 'sites'" />
   <SignalTab v-else-if="tab.id === 'signal'" />
-  <StorageTab v-else-if="tab.id === 'storage'" :signal="hasModem !== false" />
+  <StorageTab v-else-if="tab.id === 'storage'" />
 </template>

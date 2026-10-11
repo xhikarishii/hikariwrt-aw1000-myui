@@ -5,19 +5,24 @@ import { useDisplay } from 'vuetify'
 import PageHeader from '@/components/PageHeader.vue'
 import HkIcon from '@/components/icons/HkIcon.vue'
 import ClientSheet from '@/components/clients/ClientSheet.vue'
-import { loadClients } from '@/api/clients'
+import { clientStats, loadClients } from '@/api/clients'
 import { usePoll } from '@/composables/poll'
 import type { Client } from '@/utils/clients'
-import { rate, signalWord } from '@/utils/clients'
+import { signalWord } from '@/utils/clients'
 import { signed } from '@/utils/format'
+import { rate } from '@/utils/series'
 
-// Clients: every device the router knows, Wi-Fi ones live (signal, speed).
-// Polled every 10 s; all of it is cheap (leases, hints, assoclists, uci).
-// The open device lives in the URL (?mac=) so search can link to it.
+// Clients: every device the router knows, Wi-Fi ones live (signal), and
+// what each is moving now. The list is polled every 10 s (leases, hints,
+// assoclists, uci); the traffic every 5 s from aw1000-monitor's clients
+// collector, when it's installed. The open device lives in the URL (?mac=)
+// so search can link to it.
 const route = useRoute()
 const router = useRouter()
 const { xs } = useDisplay()
 const list = usePoll(loadClients, 10000)
+const stats = usePoll(() => clientStats().catch(() => null), 5000)
+const trafficOf = (c: Client) => stats.data.value?.clients[c.mac] ?? null
 
 type Filter = 'all' | 'wifi' | 'wired' | 'guest' | 'blocked'
 const filter = ref<Filter>('all')
@@ -109,7 +114,9 @@ const pick = (c: Client) => router.replace({ query: { mac: c.mac } })
         <span class="hk-dev__name">{{ c.name ?? 'Unknown device' }}</span>
         <span class="hk-dev__line">{{ line(c) }}</span>
       </span>
-      <span v-if="!xs && c.online && c.link === 'wifi'" class="hk-dev__rate hk-num">↓ {{ rate(c.txRate) }}</span>
+      <span v-if="!xs && trafficOf(c) && trafficOf(c)!.down + trafficOf(c)!.up > 0" class="hk-dev__rate hk-num">
+        ↓ {{ rate(trafficOf(c)!.down) }} · ↑ {{ rate(trafficOf(c)!.up) }}
+      </span>
       <span v-if="c.blocked" class="hk-chip hk-chip--error">Blocked</span>
       <span v-else-if="c.reserved && !xs" class="hk-chip hk-chip--outline">Reserved</span>
       <HkIcon name="arrowRight" :size="18" class="text-muted" />
@@ -118,7 +125,9 @@ const pick = (c: Client) => router.replace({ query: { mac: c.mac } })
     <v-skeleton-loader v-if="!list.data.value && !list.error.value" type="list-item-avatar-two-line@5" bg-color="transparent" />
   </section>
 
-  <v-navigation-drawer v-if="!xs" v-model="sheet" location="right" temporary width="440" color="surface-container-low">
+  <!-- disable-route-watcher: a temporary drawer closes on every route change,
+       and opening one is a route change (?mac=) - it would shut at once. -->
+  <v-navigation-drawer v-if="!xs" v-model="sheet" location="right" temporary disable-route-watcher width="440" color="surface-container-low">
     <ClientSheet v-if="open" :client="open" @changed="list.refresh()" />
   </v-navigation-drawer>
   <v-bottom-sheet v-else v-model="sheet" inset>

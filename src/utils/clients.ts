@@ -47,6 +47,8 @@ export interface Client {
   rxBytes: number | null
   txBytes: number | null
   connected: number | null
+  /** Seconds left on its DHCP lease; -1 for one that never expires, null without a lease. */
+  lease: number | null
   ifname: string | null
   host: HostSection | null
   reserved: boolean
@@ -56,7 +58,7 @@ export interface Client {
 }
 
 export interface ClientSources {
-  leases: { hostname?: string; macaddr: string; ipaddr?: string }[]
+  leases: { hostname?: string; macaddr: string; ipaddr?: string; expires?: number }[]
   hints: Record<string, { name?: string; ipaddrs?: string[] }>
   hosts: HostSection[]
   aps: ApInfo[]
@@ -90,7 +92,7 @@ export function mergeClients(s: ClientSources): Client[] {
       c = {
         mac: k, name: null, ip: null, link: 'unknown', band: null, guest: false, online: false,
         signal: null, rxRate: null, txRate: null, rxBytes: null, txBytes: null, connected: null,
-        ifname: null, host: null, reserved: false, blocked: false, randomMac: isRandomMac(k),
+        lease: null, ifname: null, host: null, reserved: false, blocked: false, randomMac: isRandomMac(k),
       }
       all.set(k, c)
     }
@@ -110,6 +112,7 @@ export function mergeClients(s: ClientSources): Client[] {
     const c = get(l.macaddr)
     if (l.ipaddr) c.ip = l.ipaddr
     if (l.hostname) c.name = l.hostname
+    if (typeof l.expires === 'number') c.lease = l.expires
   }
   for (const h of s.hosts) {
     for (const mac of h.mac) {
@@ -172,4 +175,14 @@ export function signalWord(dbm: number | null): string {
 /** Firewall section name for a MAC's block rule. */
 export function blockSection(mac: string): string {
   return `hikari_block_${mac.replace(/:/g, '').toLowerCase()}`
+}
+
+/** "6 h 33 min", "never" - a DHCP lease's time left. */
+export function leaseLeft(seconds: number | null): string | null {
+  if (seconds == null) return null
+  if (seconds < 0) return 'never expires'
+  if (seconds < 60) return 'renewing now'
+  const h = Math.floor(seconds / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  return h ? `${h} h ${m} min` : `${m} min`
 }

@@ -13,7 +13,7 @@ interface WirelessStatus {
 
 export async function loadClients(): Promise<Client[]> {
   const [leases, hints, dhcp, fw, wl, guestIface, lanIface] = await Promise.all([
-    call<{ dhcp_leases: { hostname?: string; macaddr: string; ipaddr?: string }[] }>('luci-rpc', 'getDHCPLeases'),
+    call<{ dhcp_leases: { hostname?: string; macaddr: string; ipaddr?: string; expires?: number }[] }>('luci-rpc', 'getDHCPLeases'),
     call<Record<string, { name?: string; ipaddrs?: string[] }>>('luci-rpc', 'getHostHints'),
     uci.getConfig('dhcp'),
     uci.getConfig('firewall'),
@@ -118,3 +118,40 @@ export async function disconnectWifi(c: Client): Promise<void> {
   if (!c.ifname) throw new Error('This device is not on Wi-Fi.')
   await call(`hostapd.${c.ifname}`, 'del_client', { addr: c.mac.toLowerCase(), reason: 5, deauth: true, ban_time: 0 })
 }
+
+// ---- traffic (aw1000-monitor's clients collector, luci.aw1000-monitor) ----
+
+export interface ClientTraffic {
+  /** bytes a second at the last sample */
+  down: number
+  up: number
+  today: { down: number; up: number }
+  month: { down: number; up: number }
+}
+
+export interface ClientStats {
+  ok: boolean
+  enabled: boolean
+  running: boolean
+  /** seconds between samples */
+  interval: number
+  now: number
+  sampled: number | null
+  /** keyed by MAC, upper case */
+  clients: Record<string, ClientTraffic>
+}
+
+export interface ClientHistory {
+  ok: boolean
+  mac: string
+  interval: number
+  /** the last ten minutes, one point per sample, bytes a second */
+  ts: number[]
+  down: number[]
+  up: number[]
+  /** totals for every day kept, oldest first */
+  days: { date: string; down: number; up: number }[]
+}
+
+export const clientStats = () => call<ClientStats>('luci.aw1000-monitor', 'clientstats')
+export const clientHistory = (mac: string) => call<ClientHistory>('luci.aw1000-monitor', 'clienthistory', { mac })
