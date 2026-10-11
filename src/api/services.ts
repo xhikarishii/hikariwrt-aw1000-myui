@@ -111,6 +111,10 @@ export interface SpeedStatus {
     isp: string
   }
   results: SpeedResult[]
+  /** results kept (10, 25, 50 or 100) */
+  keep?: number
+  /** where the results are kept beyond RAM */
+  persist?: { enabled: boolean; target: string; path: string; kind: 'flash' | 'usb' | 'drive'; flush_interval: number; cards: boolean }
 }
 
 export const speedInterfaces = () =>
@@ -120,6 +124,15 @@ export const speedStart = (iface: string) =>
   call<{ ok: boolean; error?: string }>('luci.aw1000-speedtest', 'start', { interface: iface })
 export const speedCancel = () => call('luci.aw1000-speedtest', 'cancel')
 export const speedAccept = () => call('luci.aw1000-speedtest', 'accept')
+/** Results kept, and where: persist on a target, saved every flush seconds (0: after each test). */
+export const speedSettings = (keep: number, persist: boolean, target: string, flush: number, cards: boolean) =>
+  call<{ ok: boolean; error?: string }>('luci.aw1000-speedtest', 'settings', {
+    keep: String(keep),
+    persist: persist ? '1' : '0',
+    persist_target: target,
+    flush_interval: String(flush),
+    persist_cards: cards ? '1' : '0',
+  })
 
 // ---- WireGuard (luci.aw1000-vpn) ----
 

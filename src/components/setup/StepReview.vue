@@ -4,6 +4,7 @@ import HkIcon from '@/components/icons/HkIcon.vue'
 import type { IconName } from '@/components/icons/registry'
 import type { SetupState, StepId } from '@/composables/setup'
 import { countryByIso } from '@/utils/countries'
+import { driveTitle } from '@/utils/drive'
 
 // Everything that will change, in plain words, with a way back to each step.
 const props = defineProps<{ s: SetupState }>()
@@ -72,6 +73,24 @@ const rows = computed<Row[]>(() => {
     changed: c.wifi || c.country,
     step: 'wifi',
   })
+  const sd = d.storage
+  const o = s.offer.value
+  if (s.offers.value.length || c.storage) {
+    const what = [sd.monitoring && s.orig.monStorage && 'monitoring', sd.usage && s.orig.usage?.persist && 'data usage', sd.speedtest && s.orig.speed && 'speed tests']
+      .filter(Boolean)
+      .join(', ')
+    r.push({
+      icon: 'storage',
+      title: 'Storage',
+      value:
+        sd.use && o
+          ? `${sd.format ? 'Erase and format ' : ''}${driveTitle(o.disk)}: ${what || 'nothing'}` +
+            (s.storageChanges.value.wipe ? ' · deleting its old history' : s.oldHistory.value && sd.monitoring ? ' · carrying on with its history' : '')
+          : 'No drive used',
+      changed: c.storage,
+      step: 'storage',
+    })
+  }
   return r
 })
 const anything = computed(() => Object.values(props.s.changes.value).some(Boolean))

@@ -11,6 +11,8 @@ const COVER: { icon: IconName; text: string }[] = [
   { icon: 'system', text: 'The router’s name and time zone' },
   { icon: 'internet', text: 'Your internet: cable, 5G, or both' },
   { icon: 'wifi', text: 'Your Wi-Fi name and password' },
+  { icon: 'storage', text: 'A USB drive for the router’s history' },
+  { icon: 'check', text: 'A last look before anything changes' },
 ]
 </script>
 

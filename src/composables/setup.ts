@@ -9,6 +9,11 @@
 // country) of the network this browser is on disconnects it, which would make
 // a rollback always fire.
 //
+// The Storage step offers a drive plugged into the router for the histories
+// the router keeps - monitoring, 5G data usage, speed tests - and, when it
+// has to be, mounts or formats it first. Its tasks run after the network
+// ones and before Wi-Fi.
+//
 // The country chosen on the "Name and time" step is used twice: as the Wi-Fi
 // regulatory domain (which channels and power are legal) and to pick the
 // carrier list the 5G APN comes from - so the two can't disagree.
@@ -22,18 +27,23 @@ import {
   type MultiwanFull, type WanConfig, type WanMac, type WanPort,
 } from '@/api/wan'
 import { wifiRadios, type WifiRadio } from '@/api/wifi'
+import * as storageApi from '@/api/storage'
+import * as monitor from '@/api/monitor'
+import { speedSettings, speedStatus, type SpeedStatus } from '@/api/services'
+import { driveOffers, driveTitle, firstPartition, needsFormat } from '@/utils/drive'
 import { markSetupDone, wanCarrier } from '@/api/setup'
 import { useSession } from '@/stores/session'
 import { dnsError, ipError, keyError, macError, mtuError, netmaskError, normalizeMac, parseList, ssidError } from '@/utils/validate'
 import { countryByIso, guessCountry } from '@/utils/countries'
 
-export type StepId = 'welcome' | 'password' | 'system' | 'internet' | 'wifi' | 'review'
+export type StepId = 'welcome' | 'password' | 'system' | 'internet' | 'wifi' | 'storage' | 'review'
 export const STEPS: { id: StepId; title: string; lead: string }[] = [
   { id: 'welcome', title: 'Welcome', lead: 'A few minutes to get your router ready. Nothing changes until the last step.' },
   { id: 'password', title: 'Admin password', lead: 'Protects these settings. You’ll use it to sign in here, in LuCI and over SSH.' },
   { id: 'system', title: 'Name, country and time', lead: 'What the router is called on your network, and where it is. The country sets which Wi-Fi channels are allowed.' },
   { id: 'internet', title: 'Internet', lead: 'How the router connects: a cable from your ISP, the 5G SIM, or both.' },
   { id: 'wifi', title: 'Wi-Fi', lead: 'The network your devices join.' },
+  { id: 'storage', title: 'Storage', lead: 'A USB drive or SD card for the history your router keeps.' },
   { id: 'review', title: 'Review', lead: 'Check everything, then set it up.' },
 ]
 
@@ -85,6 +95,12 @@ export function useSetup() {
     ipv6: null as modem.Ipv6Info | null,
     wanPort: null as WanPort | null,
     wanMac: null as WanMac | null,
+    /** drives plugged in (re-read while the Storage step is open) */
+    drives: null as storageApi.StorageStatus | null,
+    /** where each history is kept now */
+    monStorage: null as monitor.StorageInfo | null,
+    usage: null as modem.UsageInfo | null,
+    speed: null as SpeedStatus | null,
   })
 
   // What the router is set up as now: standalone when multi-WAN has the wired
@@ -116,12 +132,18 @@ export function useSetup() {
     mac: { mode: 'own' as 'own' | 'custom', value: '' },
     apn: { mode: 'auto', carrier: '', apn: '', auth: 'none', username: '', password: '', pdptype: '' } as ApnForm,
     wifi: { same: true, ssid: '', key: '', encryption: 'sae-mixed', bands: [] as BandForm[] },
+    /**
+     * A drive for the router's histories. `disk` names it; `format` erases it
+     * first (a blank or unreadable drive); the rest say what goes on it.
+     * `touched` stops a drive plugged in later from changing a choice made.
+     */
+    storage: { use: false, disk: '', format: false, monitoring: true, usage: true, speedtest: true, touched: false, old: 'keep' as 'keep' | 'fresh' },
   })
 
   async function load(): Promise<void> {
     loading.value = true
     try {
-      const [s, z, w, r, p, m, c, mw, v6, wp, wm] = await Promise.all([
+      const [s, z, w, r, p, m, c, mw, v6, wp, wm, dr, ms, us, sp] = await Promise.all([
         sys.systemSettings().catch(() => null),
         sys.timezones().catch(() => ({})),
         wanConfig(),
@@ -133,8 +155,15 @@ export function useSetup() {
         hasModem.value ? modem.ipv6info().catch(() => null) : Promise.resolve(null),
         wanPort(),
         wanMac(),
+        session.has('luci.aw1000-storage') ? storageApi.status().catch(() => null) : Promise.resolve(null),
+        session.has('luci.aw1000-monitor') ? monitor.storage().catch(() => null) : Promise.resolve(null),
+        hasModem.value ? modem.usageinfo().catch(() => null) : Promise.resolve(null),
+        session.has('luci.aw1000-speedtest') ? speedStatus().catch(() => null) : Promise.resolve(null),
       ])
-      Object.assign(orig, { system: s, wan: w, radios: r, profile: p?.ok ? p : null, modem: m, multiwan: mw, ipv6: v6?.ok ? v6 : null, wanPort: wp, wanMac: wm })
+      Object.assign(orig, {
+        system: s, wan: w, radios: r, profile: p?.ok ? p : null, modem: m, multiwan: mw, ipv6: v6?.ok ? v6 : null, wanPort: wp, wanMac: wm,
+        drives: dr?.ok ? dr : null, monStorage: ms?.ok ? ms : null, usage: us?.ok ? us : null, speed: sp?.ok && sp.persist ? sp : null,
+      })
       carriers.value = orig.profile?.carriers ?? []
       zones.value = z
       carrier.value = c
@@ -142,6 +171,7 @@ export function useSetup() {
       fill('system')
       fill('internet')
       fill('wifi')
+      fill('storage')
       loadError.value = ''
     } catch (e) {
       loadError.value = e instanceof Error ? e.message : String(e)
@@ -184,6 +214,23 @@ export function useSetup() {
         })
       }
     }
+    if (step === 'storage') {
+      const offers = driveOffers(o.drives)
+      // A drive that can be used as it is (or only needs mounting) is offered
+      // switched on; formatting one is never chosen for you.
+      const usable = offers.find((x) => !needsFormat(x))
+      const first = usable ?? offers[0]
+      Object.assign(draft.storage, {
+        use: !!usable,
+        disk: first?.disk.name ?? '',
+        format: false,
+        monitoring: !!o.monStorage,
+        usage: !!o.usage?.persist,
+        speedtest: !!o.speed,
+        touched: false,
+        old: 'keep',
+      })
+    }
     if (step === 'wifi') {
       const aps = o.radios.flatMap((radio) => radio.networks.filter((n) => !n.guest).map((n) => ({ radio, n })))
       draft.wifi.bands = aps.map(({ radio, n }) => ({
@@ -217,6 +264,36 @@ export function useSetup() {
       if (draft.apn.mode === 'list' && !carriers.value.some((x) => x.id === draft.apn.carrier)) draft.apn.carrier = ''
     },
   )
+
+  // ---- the Storage step's drives ----
+  const offers = computed(() => driveOffers(orig.drives))
+  const offer = computed(() => offers.value.find((x) => x.disk.name === draft.storage.disk) ?? null)
+  /** Re-read the drives (the step polls this): a drive plugged in now is offered. */
+  async function refreshDrives(): Promise<void> {
+    const st = await storageApi.status().catch(() => null)
+    if (!st?.ok) return
+    const had = orig.drives?.disks.map((d) => d.name).join() ?? ''
+    orig.drives = st
+    if (!draft.storage.touched && st.disks.map((d) => d.name).join() !== had) fill('storage')
+  }
+  /** Where the histories would go on the chosen drive (null until formatted). */
+  const storageTarget = computed(() => {
+    const o = offer.value
+    if (!o) return null
+    if (draft.storage.format) return `/mnt/${firstPartition(o.disk.name)}`
+    return o.target
+  })
+
+  /**
+   * Monitoring history already on the chosen drive from before - this router
+   * before a reset, or another one - and not the place in use now. The step
+   * asks whether to carry on with it or start afresh; a format erases it anyway.
+   */
+  const oldHistory = computed(() => {
+    const t = storageTarget.value
+    if (!t || draft.storage.format) return null
+    return orig.monStorage?.found?.find((f) => f.id === t && !f.current) ?? null
+  })
 
   // ---- validation per step ----
   const passwordErrors = computed(() => {
@@ -258,6 +335,11 @@ export function useSetup() {
     system: /^[A-Za-z0-9][A-Za-z0-9-]{0,62}$/.test(draft.system.hostname) && draft.system.zonename in zones.value && !!countryByIso(draft.system.country),
     internet: Object.values(wanErrors.value).every((e) => !e) && !apnError.value,
     wifi: !wifiErrors.value.ssid && !wifiErrors.value.key && wifiErrors.value.bands.every((b) => !b.ssid && !b.key),
+    storage:
+      !draft.storage.use ||
+      (!!offer.value &&
+        (!needsFormat(offer.value) || draft.storage.format) &&
+        (draft.storage.monitoring || draft.storage.usage || draft.storage.speedtest)),
     review: true,
   }))
 
@@ -325,7 +407,28 @@ export function useSetup() {
       ipv6: hasModem.value && !!o.ipv6 && draft.v6style !== (o.ipv6.config.style || 'dual'),
       country: !!draft.system.country && o.radios.some((r) => (r.country || '').toUpperCase() !== draft.system.country),
       wifi,
+      storage: storageChanges.value.any,
     }
+  })
+
+  // What the Storage step would do: prepare the drive, then move each chosen
+  // history onto it - only those not already there.
+  const storageChanges = computed(() => {
+    const d = draft.storage
+    const o = offer.value
+    const none = { any: false, prepare: null as 'format' | 'mount' | null, monitoring: false, usage: false, speedtest: false, wipe: false }
+    if (!d.use || !o) return none
+    const t = storageTarget.value
+    const prepare = d.format ? ('format' as const) : o.state === 'unmounted' ? ('mount' as const) : null
+    const ms = orig.monStorage?.persist
+    const monitoring = d.monitoring && !!orig.monStorage && !(ms?.enabled && ms.target === t)
+    const usage = d.usage && !!orig.usage?.persist && orig.usage.persist.target !== t
+    const sp = orig.speed?.persist
+    const speedtest = d.speedtest && !!orig.speed && !(sp?.enabled && sp.target === t)
+    // what an earlier stay on this drive left: kept (merged with what the
+    // router has now, when the monitor restarts on it) or deleted first
+    const wipe = monitoring && !!oldHistory.value && d.old === 'fresh'
+    return { any: !!prepare || monitoring || usage || speedtest, prepare, monitoring, usage, speedtest, wipe }
   })
 
   // ---- apply ----
@@ -411,6 +514,95 @@ export function useSetup() {
         run: () => setWanAsLan(p, on),
       })
     }
+    const sc = storageChanges.value
+    if (sc.any && offer.value) {
+      const o = offer.value
+      const name = driveTitle(o.disk)
+      // the drive's mountpoint once it's ready: known now, or read back after a format
+      let target = storageTarget.value
+      if (sc.prepare === 'format')
+        t.push({
+          id: 'format',
+          label: `Erase ${o.disk.name} (${name}) and format it`,
+          state: 'pending',
+          run: async () => {
+            const r = await storageApi.format(o.disk.name, 'ext4', 'HikariWrt', o.disk.name)
+            if (!r.ok) throw new Error(r.error || 'The drive could not be formatted.')
+            // a background job on the router; it mounts the drive when done
+            for (let i = 0; i < 300; i++) {
+              await new Promise((ok) => setTimeout(ok, 2000))
+              const j = (await storageApi.job().catch(() => null))?.job
+              if (j?.state === 'failed') throw new Error(j.error || j.message || 'Formatting failed.')
+              if (j?.state === 'done') break
+            }
+            const st = await storageApi.status()
+            const p = st.disks.find((x) => x.name === o.disk.name)?.partitions.find((x) => x.mounted && x.mountpoint)
+            if (!p?.mountpoint) throw new Error('The drive was formatted but isn’t mounted; mount it on the Storage page.')
+            target = p.mountpoint
+            orig.drives = st
+          },
+        })
+      if (sc.prepare === 'mount' && o.part) {
+        const part = o.part
+        t.push({
+          id: 'mount',
+          label: `Mount ${part.name} on ${name}`,
+          state: 'pending',
+          run: async () => {
+            const r = await storageApi.mount(part.name)
+            if (!r.ok) throw new Error(r.error || 'The drive could not be mounted.')
+            const st = await storageApi.status()
+            const p = st.disks.flatMap((x) => x.partitions).find((x) => x.name === part.name)
+            if (p?.mountpoint) target = p.mountpoint
+            orig.drives = st
+          },
+        })
+      }
+      const what = [sc.monitoring && 'monitoring', sc.usage && '5G data usage', sc.speedtest && 'speed test'].filter(Boolean)
+      if (what.length)
+        t.push({
+          id: 'storage',
+          label:
+            `Keep the ${what.join(', ')} history on ${o.disk.name}` +
+            (sc.wipe ? ', deleting what an earlier setup left there' : sc.monitoring && oldHistory.value ? ', carrying on with what’s there' : ''),
+          state: 'pending',
+          run: async () => {
+            if (!target) throw new Error('The drive has no mountpoint yet.')
+            if (sc.wipe) {
+              const r = await monitor.storageWipe(target)
+              if (!r.ok) throw new Error(r.error || 'The old monitoring history could not be deleted.')
+            }
+            if (sc.monitoring) {
+              const p = orig.monStorage?.persist
+              const r = await monitor.storageSettings(true, target, p?.days ?? 365, p?.flush_interval ?? 1800)
+              if (!r.ok) throw new Error(r.error || 'The monitoring history could not be moved.')
+            }
+            if (sc.usage && orig.usage) {
+              const u = orig.usage
+              const s = u.settings
+              const r = await modem.usageSet({
+                enabled: u.enabled,
+                limit: s.limit_value ? String(s.limit_value) : '0',
+                unit: s.unit,
+                reset_day: s.reset_day,
+                warn_percent: s.warn_percent,
+                sms_notify: s.sms_notify,
+                sms_number: s.sms_number ?? '',
+                action: s.action === 'disconnect' ? 'disconnect' : 'none',
+                retain_days: s.retain_days,
+                persist_target: target,
+                flush_interval: s.flush_interval,
+              })
+              if (!r.ok) throw new Error(r.error || 'The data usage history could not be moved.')
+            }
+            if (sc.speedtest && orig.speed?.persist) {
+              const sp = orig.speed
+              const r = await speedSettings(sp.keep ?? 25, true, target, sp.persist!.flush_interval ?? 0, sp.persist!.cards ?? true)
+              if (!r.ok) throw new Error(r.error || 'The speed test results could not be moved.')
+            }
+          },
+        })
+    }
     t.push({ id: 'done', label: 'Remember that setup is finished', state: 'pending', run: () => markSetupDone() })
     if (c.wifi || c.country) {
       const country = draft.system.country
@@ -469,6 +661,7 @@ export function useSetup() {
   return {
     loading, loadError, load, fill, orig, zones, carrier, hasModem, hasUsage, carriers, draft,
     passwordErrors, wanErrors, apnError, wifiErrors, valid, changes, wifiNext, macNext,
+    offers, offer, refreshDrives, storageTarget, storageChanges, oldHistory,
     tasks, applying, finished, apply, retry,
   }
 }

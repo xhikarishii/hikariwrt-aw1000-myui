@@ -22,6 +22,8 @@ export interface Partition {
   free_kb: number | null
   mode: PartMode
   fstab: string | null
+  /** where fstab mounts it, mounted or not */
+  target?: string | null
   enabled: boolean
   options: string | null
 }

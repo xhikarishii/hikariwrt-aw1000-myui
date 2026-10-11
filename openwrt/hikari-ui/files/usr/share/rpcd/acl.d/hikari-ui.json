@@ -154,7 +154,8 @@
 				"luci.aw1000-speedtest": [
 					"start",
 					"cancel",
-					"accept"
+					"accept",
+					"settings"
 				],
 				"luci.aw1000-vpn": [
 					"enable",
@@ -187,6 +188,8 @@
 					"reboot"
 				],
 				"luci.aw1000-monitor": [
+					"storagesettings",
+					"storagewipe",
 					"flush",
 					"sitecheck",
 					"siteaction"

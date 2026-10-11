@@ -279,9 +279,27 @@ export interface StorageInfo {
   /** the setting itself; last_flush and error are per history, below */
   persist: Omit<Persist, 'last_flush' | 'error'>
   storage: StorageOption[]
+  /**
+   * History already kept in each place the storage could use: a drive used
+   * before (by this router before a reset, or another one) shows up here.
+   * `current` is the place in use now; `oldest` / `newest` the span, epoch s.
+   */
+  found?: { id: string; path: string; kb: number; histories: string[]; oldest: number | null; newest: number | null; current: boolean }[]
   /** the histories running now */
   histories: { id: 'uptime' | 'sites' | 'signal' | 'clients'; name: string; last_flush: number | null; error: string | null; kb: number }[]
 }
 
 /** Where every monitor's history is kept, and what each has saved. */
 export const storage = () => call<StorageInfo>('luci.aw1000-monitor', 'storage')
+
+/** Where every monitor's history is kept; restarts the monitor. */
+export const storageSettings = (persist: boolean, target: string, days: number, flush: number) =>
+  call<{ ok: boolean; error?: string }>('luci.aw1000-monitor', 'storagesettings', {
+    persist: persist ? '1' : '0',
+    persist_target: target,
+    persist_days: String(days),
+    flush_interval: String(flush),
+  })
+
+/** Delete the monitoring history kept in one place ("router" or a mountpoint); RAM keeps its own. */
+export const storageWipe = (target: string) => call<{ ok: boolean; error?: string }>('luci.aw1000-monitor', 'storagewipe', { target })
