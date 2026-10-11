@@ -49,7 +49,8 @@
 				],
 				"luci.aw1000-speedtest": [
 					"status",
-					"interfaces"
+					"interfaces",
+					"history"
 				],
 				"luci.aw1000-vpn": [
 					"list",
@@ -155,6 +156,7 @@
 					"start",
 					"cancel",
 					"accept",
+					"clear",
 					"settings"
 				],
 				"luci.aw1000-vpn": [

@@ -91,6 +91,12 @@ export interface SpeedResult {
   isp?: string
   server?: string
   location?: string
+  /** the result on speedtest.net */
+  url?: string
+  /** run by the schedule */
+  auto?: boolean
+  /** what the test moved, both ways */
+  bytes?: number
   error?: string
 }
 
@@ -101,6 +107,8 @@ export interface SpeedStatus {
   running: boolean
   run?: {
     interface: string
+    /** started by the schedule */
+    auto?: boolean
     started: number
     stage: string
     progress: number | null
@@ -113,8 +121,57 @@ export interface SpeedStatus {
   results: SpeedResult[]
   /** results kept (10, 25, 50 or 100) */
   keep?: number
-  /** where the results are kept beyond RAM */
-  persist?: { enabled: boolean; target: string; path: string; kind: 'flash' | 'usb' | 'drive'; flush_interval: number; cards: boolean }
+  /**
+   * where the results are kept beyond RAM; shared: by the monitoring
+   * history's one storage setting (Monitoring -> Storage)
+   */
+  persist?: { shared?: boolean; enabled: boolean; target: string; path: string; kind: 'flash' | 'usb' | 'drive'; flush_interval: number; cards: boolean }
+  /** testing by itself: every `interval` hours over `ifaces`; set on LuCI's Monitoring -> Speed test */
+  schedule?: SpeedSchedule
+}
+
+export interface SpeedSchedule {
+  enabled: boolean
+  /** hours: 1, 3, 6, 12 or 24 */
+  interval: number
+  ifaces: string[]
+  /** the slot last run, and the next (null when off), epoch s */
+  last: number | null
+  next: number | null
+  /** per uplink, from its last tests: bytes a test, and a day at this interval */
+  estimate: { iface: string; per_test: number; per_day: number }[]
+}
+
+export type SpeedRange = '24h' | '7d' | '30d' | '90d' | '365d'
+
+/** One uplink in the history: per bucket the mean and low-high of each, in Mbps and ms. */
+export interface SpeedHistoryIface {
+  name: string
+  label: string
+  tests: number
+  failed: number
+  last: number | null
+  download: (number | null)[]
+  download_min: (number | null)[]
+  download_max: (number | null)[]
+  upload: (number | null)[]
+  upload_min: (number | null)[]
+  upload_max: (number | null)[]
+  latency: (number | null)[]
+  latency_min: (number | null)[]
+  latency_max: (number | null)[]
+  summary: Record<'download' | 'upload' | 'latency', { avg: number; min: number; max: number } | null>
+}
+
+export interface SpeedHistory {
+  ok: boolean
+  range: SpeedRange
+  from: number
+  to: number
+  step: number
+  ts: number[]
+  /** every uplink in multiwan's order (the other Monitoring pages' colours), then any other tested */
+  ifaces: SpeedHistoryIface[]
 }
 
 export const speedInterfaces = () =>
@@ -124,6 +181,10 @@ export const speedStart = (iface: string) =>
   call<{ ok: boolean; error?: string }>('luci.aw1000-speedtest', 'start', { interface: iface })
 export const speedCancel = () => call('luci.aw1000-speedtest', 'cancel')
 export const speedAccept = () => call('luci.aw1000-speedtest', 'accept')
+/** Every test of a period, per uplink, for the graphs. */
+export const speedHistory = (range: SpeedRange) => call<SpeedHistory>('luci.aw1000-speedtest', 'history', { range })
+/** Forget every kept result and the history, and the saved copies. */
+export const speedClear = () => call<{ ok: boolean; error?: string }>('luci.aw1000-speedtest', 'clear')
 /** Results kept, and where: persist on a target, saved every flush seconds (0: after each test). */
 export const speedSettings = (keep: number, persist: boolean, target: string, flush: number, cards: boolean) =>
   call<{ ok: boolean; error?: string }>('luci.aw1000-speedtest', 'settings', {

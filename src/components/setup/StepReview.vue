@@ -76,7 +76,7 @@ const rows = computed<Row[]>(() => {
   const sd = d.storage
   const o = s.offer.value
   if (s.offers.value.length || c.storage) {
-    const what = [sd.monitoring && s.orig.monStorage && 'monitoring', sd.usage && s.orig.usage?.persist && 'data usage', sd.speedtest && s.orig.speed && 'speed tests']
+    const what = [sd.monitoring && s.orig.monStorage && (s.orig.speed ? 'monitoring and speed tests' : 'monitoring'), sd.usage && s.orig.usage?.persist && 'data usage']
       .filter(Boolean)
       .join(', ')
     r.push({

@@ -8,7 +8,7 @@ import { bytes } from '@/utils/format'
 import { driveTitle, needsFormat, type DriveOffer } from '@/utils/drive'
 
 // A USB drive or SD card for the history the router keeps: monitoring (uptime,
-// sites, signal, client traffic), 5G data usage and speed test results. The
+// sites, signal, client traffic, and the speed test results with it) and 5G data usage. The
 // drives are looked for while this step is open, so one plugged in now shows
 // up. A drive that is ready (or only needs mounting) is offered switched on;
 // formatting one is never chosen for you.
@@ -58,11 +58,10 @@ const oldSize = computed(() => {
 const target = computed(() => props.s.storageTarget.value)
 const here = computed(() => {
   const o = props.s.orig
-  if (d.value.format) return { monitoring: false, usage: false, speedtest: false }
+  if (d.value.format) return { monitoring: false, usage: false }
   return {
     monitoring: !!o.monStorage?.persist.enabled && o.monStorage.persist.target === target.value,
     usage: !!o.usage?.persist && o.usage.persist.target === target.value,
-    speedtest: !!o.speed?.persist?.enabled && o.speed.persist.target === target.value,
   }
 })
 const used = computed(() => {
@@ -196,7 +195,7 @@ const onIt = computed(() => {
         <div v-if="s.orig.monStorage" class="hk-what">
           <div class="d-flex flex-column flex-grow-1">
             <span style="font-size: 14px">Monitoring history</span>
-            <span class="hk-label">Uptime, website checks, 5G signal and each device’s traffic{{ here.monitoring ? ' · already here' : '' }}</span>
+            <span class="hk-label">Uptime, website checks, 5G signal and each device’s traffic{{ s.orig.speed ? ', and the speed test results' : '' }}{{ here.monitoring ? ' · already here' : '' }}</span>
           </div>
           <M3Switch v-model="d.monitoring" label="Monitoring history" @update:model-value="touch" />
         </div>
@@ -206,13 +205,6 @@ const onIt = computed(() => {
             <span class="hk-label">The daily counts behind the allowance{{ here.usage ? ' · already here' : '' }}</span>
           </div>
           <M3Switch v-model="d.usage" label="5G data usage" @update:model-value="touch" />
-        </div>
-        <div v-if="s.orig.speed" class="hk-what">
-          <div class="d-flex flex-column flex-grow-1">
-            <span style="font-size: 14px">Speed test results</span>
-            <span class="hk-label">The results list and their share cards{{ here.speedtest ? ' · already here' : '' }}</span>
-          </div>
-          <M3Switch v-model="d.speedtest" label="Speed test results" @update:model-value="touch" />
         </div>
         <span class="hk-label">
           History already kept elsewhere moves to the drive. How often it’s saved and for how long can be changed later under Monitoring → Storage.

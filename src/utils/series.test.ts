@@ -25,6 +25,12 @@ describe('timeTicks', () => {
     for (const t of ticks) expect(new Date(t.t * 1000).getMinutes()).toBe(0)
     expect(ticks[0].label).toBe('11:00')
   })
+  it('labels a week on a narrow chart more than once', () => {
+    const from = new Date(2026, 9, 5, 3, 0).getTime() / 1000
+    const ticks = timeTicks(from, from + 7 * 86400, 3)
+    expect(ticks.length).toBeGreaterThanOrEqual(2)
+  })
+
   it('uses local midnights and dates for day steps', () => {
     const from = new Date(2026, 8, 1, 13, 0).getTime() / 1000
     const ticks = timeTicks(from, from + 30 * 86400, 5)

@@ -10,7 +10,7 @@
 // a rollback always fire.
 //
 // The Storage step offers a drive plugged into the router for the histories
-// the router keeps - monitoring, 5G data usage, speed tests - and, when it
+// the router keeps - monitoring (speed test results included), 5G data usage - and, when it
 // has to be, mounts or formats it first. Its tasks run after the network
 // ones and before Wi-Fi.
 //
@@ -29,7 +29,7 @@ import {
 import { wifiRadios, type WifiRadio } from '@/api/wifi'
 import * as storageApi from '@/api/storage'
 import * as monitor from '@/api/monitor'
-import { speedSettings, speedStatus, type SpeedStatus } from '@/api/services'
+import { speedStatus, type SpeedStatus } from '@/api/services'
 import { driveOffers, driveTitle, firstPartition, needsFormat } from '@/utils/drive'
 import { markSetupDone, wanCarrier } from '@/api/setup'
 import { useSession } from '@/stores/session'
@@ -137,7 +137,7 @@ export function useSetup() {
      * first (a blank or unreadable drive); the rest say what goes on it.
      * `touched` stops a drive plugged in later from changing a choice made.
      */
-    storage: { use: false, disk: '', format: false, monitoring: true, usage: true, speedtest: true, touched: false, old: 'keep' as 'keep' | 'fresh' },
+    storage: { use: false, disk: '', format: false, monitoring: true, usage: true, touched: false, old: 'keep' as 'keep' | 'fresh' },
   })
 
   async function load(): Promise<void> {
@@ -226,7 +226,6 @@ export function useSetup() {
         format: false,
         monitoring: !!o.monStorage,
         usage: !!o.usage?.persist,
-        speedtest: !!o.speed,
         touched: false,
         old: 'keep',
       })
@@ -339,7 +338,7 @@ export function useSetup() {
       !draft.storage.use ||
       (!!offer.value &&
         (!needsFormat(offer.value) || draft.storage.format) &&
-        (draft.storage.monitoring || draft.storage.usage || draft.storage.speedtest)),
+        (draft.storage.monitoring || draft.storage.usage)),
     review: true,
   }))
 
@@ -416,19 +415,17 @@ export function useSetup() {
   const storageChanges = computed(() => {
     const d = draft.storage
     const o = offer.value
-    const none = { any: false, prepare: null as 'format' | 'mount' | null, monitoring: false, usage: false, speedtest: false, wipe: false }
+    const none = { any: false, prepare: null as 'format' | 'mount' | null, monitoring: false, usage: false, wipe: false }
     if (!d.use || !o) return none
     const t = storageTarget.value
     const prepare = d.format ? ('format' as const) : o.state === 'unmounted' ? ('mount' as const) : null
     const ms = orig.monStorage?.persist
     const monitoring = d.monitoring && !!orig.monStorage && !(ms?.enabled && ms.target === t)
     const usage = d.usage && !!orig.usage?.persist && orig.usage.persist.target !== t
-    const sp = orig.speed?.persist
-    const speedtest = d.speedtest && !!orig.speed && !(sp?.enabled && sp.target === t)
     // what an earlier stay on this drive left: kept (merged with what the
     // router has now, when the monitor restarts on it) or deleted first
     const wipe = monitoring && !!oldHistory.value && d.old === 'fresh'
-    return { any: !!prepare || monitoring || usage || speedtest, prepare, monitoring, usage, speedtest, wipe }
+    return { any: !!prepare || monitoring || usage, prepare, monitoring, usage, wipe }
   })
 
   // ---- apply ----
@@ -558,7 +555,8 @@ export function useSetup() {
           },
         })
       }
-      const what = [sc.monitoring && 'monitoring', sc.usage && '5G data usage', sc.speedtest && 'speed test'].filter(Boolean)
+      // the speed test's results go with the monitoring history (one storage setting)
+      const what = [sc.monitoring && (orig.speed ? 'monitoring and speed test' : 'monitoring'), sc.usage && '5G data usage'].filter(Boolean)
       if (what.length)
         t.push({
           id: 'storage',
@@ -570,12 +568,12 @@ export function useSetup() {
             if (!target) throw new Error('The drive has no mountpoint yet.')
             if (sc.wipe) {
               const r = await monitor.storageWipe(target)
-              if (!r.ok) throw new Error(r.error || 'The old monitoring history could not be deleted.')
+              if (!r.ok) throw new Error(r.error ? `Old monitoring history: ${r.error}` : 'The old monitoring history could not be deleted.')
             }
             if (sc.monitoring) {
               const p = orig.monStorage?.persist
               const r = await monitor.storageSettings(true, target, p?.days ?? 365, p?.flush_interval ?? 1800)
-              if (!r.ok) throw new Error(r.error || 'The monitoring history could not be moved.')
+              if (!r.ok) throw new Error(r.error ? `Monitoring history: ${r.error}` : 'The monitoring history could not be moved.')
             }
             if (sc.usage && orig.usage) {
               const u = orig.usage
@@ -593,12 +591,7 @@ export function useSetup() {
                 persist_target: target,
                 flush_interval: s.flush_interval,
               })
-              if (!r.ok) throw new Error(r.error || 'The data usage history could not be moved.')
-            }
-            if (sc.speedtest && orig.speed?.persist) {
-              const sp = orig.speed
-              const r = await speedSettings(sp.keep ?? 25, true, target, sp.persist!.flush_interval ?? 0, sp.persist!.cards ?? true)
-              if (!r.ok) throw new Error(r.error || 'The speed test results could not be moved.')
+              if (!r.ok) throw new Error(r.error ? `5G data usage: ${r.error}` : 'The data usage history could not be moved.')
             }
           },
         })

@@ -7,7 +7,7 @@ import { luciUrl } from '@/nav'
 import { bucketTime } from '@/utils/series'
 
 // Monitoring -> Storage: one setting for every monitor's history - Uptime,
-// Sites, Signal and the Clients page's traffic - as LuCI's Monitoring ->
+// Sites, Signal, the Clients page's traffic and the speed test results - as LuCI's Monitoring ->
 // Storage shows it: where it is kept, how often it is saved, for how long,
 // and what each running monitor has saved. Changing that is done there (the
 // Change button); saving now is an action, so it's here too.
@@ -21,6 +21,7 @@ const WHAT: Record<string, string> = {
   sites: 'How fast each site answered, and the restarts and reboots',
   signal: 'The 5G modem’s readings, bands and cell changes',
   clients: 'Each device’s internet traffic, per day',
+  speedtest: 'The latest results and the history the graphs draw, saved after every test',
 }
 const keep = (d: number) => (d === 730 ? '2 years' : d === 365 ? '1 year' : `${d} days`)
 const size = (kb: number) => (kb >= 1024 ? `${(kb / 1024).toFixed(1)} MB` : `${kb} kB`)
@@ -84,7 +85,7 @@ async function saveNow(): Promise<void> {
           <div v-for="h in s.histories" :key="h.id" class="hk-st-hist">
             <div class="d-flex flex-column flex-grow-1" style="min-width: 0">
               <span style="font-size: 14px; font-weight: 600">{{ h.name }}</span>
-              <span class="hk-label">{{ WHAT[h.id] }}</span>
+              <span class="hk-label">{{ h.id === 'speedtest' ? `The last ${h.keep ?? 10} results${h.cards ? ' and their share cards' : ''}, and every test’s history, saved after every test` : WHAT[h.id] }}</span>
             </div>
             <div class="d-flex flex-column align-end" style="flex: none">
               <span v-if="!p.enabled" class="hk-label">In RAM</span>

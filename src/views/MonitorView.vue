@@ -5,18 +5,22 @@ import PageHeader from '@/components/PageHeader.vue'
 import HkIcon from '@/components/icons/HkIcon.vue'
 import SignalTab from '@/components/monitor/tabs/SignalTab.vue'
 import SitesTab from '@/components/monitor/tabs/SitesTab.vue'
+import SpeedTab from '@/components/monitor/tabs/SpeedTab.vue'
 import StorageTab from '@/components/monitor/tabs/StorageTab.vue'
 import UptimeTab from '@/components/monitor/tabs/UptimeTab.vue'
 import * as monitor from '@/api/monitor'
 import { luciUrl } from '@/nav'
+import { useSession } from '@/stores/session'
 import '@/styles/monitor.css'
 
 // Monitoring, in the tabs LuCI's Monitoring menu has: Uptime (per WAN),
 // Sites (how fast websites answer over each WAN), Signal (the 5G modem's,
-// when the modem package is installed) and Storage (where each history is
-// kept). Each tab's Settings button opens its LuCI
-// page, where those settings live.
+// when the modem package is installed), Speed test (its results, when the
+// speed test is installed) and Storage (where each history is kept, the
+// speed test's too). Each tab's Settings button opens its LuCI page, where
+// those settings live.
 const route = useRoute()
+const session = useSession()
 const router = useRouter()
 
 // null until asked: a link straight to ?tab=signal shouldn't bounce to Uptime
@@ -30,6 +34,7 @@ const TABS = computed(() => [
   { id: 'uptime', title: 'Uptime', luci: 'admin/monitoring/uptime', overline: 'Uptime, latency, loss and traffic per WAN' },
   { id: 'sites', title: 'Sites', luci: 'admin/monitoring/sites', overline: 'How fast websites answer over each WAN' },
   ...(hasModem.value !== false ? [{ id: 'signal', title: 'Signal', luci: 'admin/monitoring/signal', overline: 'The 5G modem’s signal over time' }] : []),
+  ...(session.has('luci.aw1000-speedtest') ? [{ id: 'speed', title: 'Speed test', luci: 'admin/monitoring/speedtest', overline: 'Speed tests over each uplink' }] : []),
   { id: 'storage', title: 'Storage', luci: 'admin/monitoring/storage', overline: 'Where the monitoring history is kept' },
 ])
 
@@ -71,5 +76,6 @@ function pick(id: string): void {
   <UptimeTab v-if="tab.id === 'uptime'" />
   <SitesTab v-else-if="tab.id === 'sites'" />
   <SignalTab v-else-if="tab.id === 'signal'" />
+  <SpeedTab v-else-if="tab.id === 'speed'" />
   <StorageTab v-else-if="tab.id === 'storage'" />
 </template>
