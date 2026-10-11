@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import HkIcon from '@/components/icons/HkIcon.vue'
+import LogPager from '@/components/monitor/LogPager.vue'
 import SegmentedButton from '@/components/m3/SegmentedButton.vue'
 import LineChart, { type ChartSeries } from '@/components/monitor/LineChart.vue'
 import UptimeBar from '@/components/monitor/UptimeBar.vue'
 import * as monitor from '@/api/monitor'
 import type { MonitorWan, Range, WanSeries } from '@/api/monitor'
+import { usePaged } from '@/composables/paged'
 import { usePoll } from '@/composables/poll'
 import { bytes, duration } from '@/utils/format'
 import { bucketTime, mergeBar, ms, pct, rate, rateAxis, uptimePct } from '@/utils/series'
@@ -33,6 +35,7 @@ const ser = computed(() => (data.data.value?.r === range.value ? data.data.value
 const outages = computed(() =>
   (data.data.value?.events.events ?? []).filter((e) => wans.value.some((w) => w.name === e.wan) && (!only.value || e.wan === only.value)),
 )
+const outPage = usePaged(outages, () => [range.value, only.value])
 
 // 90 days and a year exist only while history is kept on storage for that long.
 const ranges = computed(() => {
@@ -224,8 +227,9 @@ const fmtPctAxis = (v: number) => `${v}%`
         <h2 class="hk-h2">Outages</h2>
         <span v-if="outages.length" class="hk-label">{{ outages.length }} in this period</span>
       </div>
-      <div v-if="outages.length" class="hk-group">
-        <div v-for="o in outages" :key="`${o.wan}${o.start}`" class="hk-mon-outage">
+      <template v-if="outages.length">
+        <div class="hk-group">
+        <div v-for="o in outPage.visible.value" :key="`${o.wan}${o.start}`" class="hk-mon-outage">
           <span class="hk-dot" :style="{ background: colorOf(o.wan) }" />
           <div class="d-flex flex-column flex-grow-1" style="min-width: 0">
             <span style="font-size: 14px">{{ o.label }} · {{ o.cause === 'link' ? 'link down' : 'no replies' }}</span>
@@ -235,6 +239,8 @@ const fmtPctAxis = (v: number) => `${v}%`
           <span v-else class="hk-num" style="font-size: 14px">{{ duration(o.duration) }}</span>
         </div>
       </div>
+      <LogPager :p="outPage" label="Outages" />
+      </template>
       <span v-else class="text-muted" style="font-size: 14px">No outages in this period.</span>
     </section>
   </div>

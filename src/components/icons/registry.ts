@@ -46,6 +46,11 @@ export const ICONS = {
   simOff: { body: '<path d="M7 3h7l5 5v12a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM4 4l16 16"/>' },
   send: { body: '<path d="M4 12L3 4.5 21 12 3 19.5z"/><path d="M4 12h8"/>' },
   arrowLeft: { body: '<path d="M19 12H5M11 6l-6 6 6 6"/>', stroke: 2.2 },
+  // the log pagers
+  chevronLeft: { body: '<path d="M15 6l-6 6 6 6"/>', stroke: 2.2 },
+  chevronRight: { body: '<path d="M9 6l6 6-6 6"/>', stroke: 2.2 },
+  chevronFirst: { body: '<path d="M17 6l-6 6 6 6M7 6v12"/>', stroke: 2.2 },
+  chevronLast: { body: '<path d="M7 6l6 6-6 6M17 6v12"/>', stroke: 2.2 },
   trash: { body: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/>' },
   person: { body: '<circle cx="12" cy="8.5" r="4"/><path d="M4.5 20.5c1-4 4-6 7.5-6s6.5 2 7.5 6"/>' },
   moreVert: { body: '<circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/>', fill: true, stroke: 0 },

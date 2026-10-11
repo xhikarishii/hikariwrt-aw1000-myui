@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import HkIcon from '@/components/icons/HkIcon.vue'
+import LogPager from '@/components/monitor/LogPager.vue'
 import SegmentedButton from '@/components/m3/SegmentedButton.vue'
 import LineChart, { type ChartSeries } from '@/components/monitor/LineChart.vue'
 import UptimeBar from '@/components/monitor/UptimeBar.vue'
@@ -8,6 +9,7 @@ import * as monitor from '@/api/monitor'
 import type { Range, SiteResult, SiteWan } from '@/api/monitor'
 import { useAction } from '@/composables/action'
 import { useConfirm } from '@/composables/confirm'
+import { usePaged } from '@/composables/paged'
 import { usePoll } from '@/composables/poll'
 import { luciUrl } from '@/nav'
 import { bucketTime, mergeBar } from '@/utils/series'
@@ -40,6 +42,7 @@ const ser = computed(() => {
   return d && d.r === range.value && d.s === site.value && d.series.ok ? d.series : null
 })
 const actions = computed(() => data.data.value?.events.actions ?? [])
+const actPage = usePaged(actions, () => range.value)
 
 const ranges = computed(() => {
   const days = st.value?.persist.enabled ? st.value.persist.days : 0
@@ -280,14 +283,17 @@ function wanState(w: SiteWan): string {
           <v-btn variant="text" color="primary" height="36" :loading="busy[`restart-${w.name}`]" @click="restart(w)">Restart</v-btn>
         </div>
       </div>
-      <div v-if="actions.length" class="hk-group">
-        <div v-for="a in actions" :key="`${a.ts}${a.wan}${a.action}`" class="hk-mon-outage">
+      <template v-if="actions.length">
+        <div class="hk-group">
+        <div v-for="a in actPage.visible.value" :key="`${a.ts}${a.wan}${a.action}`" class="hk-mon-outage">
           <div class="d-flex flex-column flex-grow-1" style="min-width: 0">
             <span style="font-size: 14px">{{ DONE[a.action] ?? a.action }} · {{ a.label || a.wan }}</span>
             <span class="hk-label">{{ bucketTime(a.ts) }} · {{ a.detail }}</span>
           </div>
         </div>
       </div>
+      <LogPager :p="actPage" label="Restarts and reboots" />
+      </template>
       <span v-else class="text-muted" style="font-size: 14px">Nothing restarted or rebooted in this period.</span>
       <div class="d-flex flex-wrap justify-end ga-2">
         <v-btn :href="luciUrl('admin/monitoring/sites')" variant="text" color="primary" height="40">Change in Settings</v-btn>

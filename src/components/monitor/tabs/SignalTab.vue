@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import HkIcon from '@/components/icons/HkIcon.vue'
+import LogPager from '@/components/monitor/LogPager.vue'
 import SegmentedButton from '@/components/m3/SegmentedButton.vue'
 import LineChart, { type ChartSeries } from '@/components/monitor/LineChart.vue'
 import ModeBar from '@/components/monitor/ModeBar.vue'
@@ -8,6 +9,7 @@ import * as monitor from '@/api/monitor'
 import * as modem from '@/api/modem'
 import type { ModemSignal } from '@/api/modem'
 import type { ModeState, Range, SignalMetric } from '@/api/monitor'
+import { usePaged } from '@/composables/paged'
 import { usePoll } from '@/composables/poll'
 import { luciUrl } from '@/nav'
 import { bucketTime } from '@/utils/series'
@@ -39,6 +41,7 @@ const m = computed(() => now.data.value)
 const ser = computed(() => (data.data.value?.r === range.value && data.data.value.series.ok ? data.data.value.series : null))
 const sum = computed(() => ser.value?.summary ?? null)
 const changes = computed(() => data.data.value?.events.changes ?? [])
+const chPage = usePaged(changes, () => range.value)
 
 const ranges = computed(() => {
   const days = st.value?.persist.enabled ? st.value.persist.days : 0
@@ -351,14 +354,17 @@ const carriers = computed(() =>
         Every move to another band, cell or network mode. Many cell changes while the router stands still mean it sits between two cells: a spot where one is
         clearly stronger, or a cell lock, keeps it on one.
       </span>
-      <div v-if="changes.length" class="hk-group">
-        <div v-for="c in changes" :key="`${c.ts}${c.kind}`" class="hk-mon-outage">
+      <template v-if="changes.length">
+        <div class="hk-group">
+        <div v-for="c in chPage.visible.value" :key="`${c.ts}${c.kind}`" class="hk-mon-outage">
           <div class="d-flex flex-column flex-grow-1" style="min-width: 0">
             <span style="font-size: 14px">{{ KIND[c.kind] ?? c.kind }}: {{ changeVal(c.kind, c.from) }} → {{ changeVal(c.kind, c.to) }}</span>
             <span class="hk-label">{{ bucketTime(c.ts) }}</span>
           </div>
         </div>
       </div>
+      <LogPager :p="chPage" label="Changes" />
+      </template>
       <span v-else class="text-muted" style="font-size: 14px">No band, cell or mode changes in this period.</span>
     </section>
 

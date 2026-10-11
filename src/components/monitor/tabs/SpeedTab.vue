@@ -2,23 +2,26 @@
 import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import HkIcon from '@/components/icons/HkIcon.vue'
+import LogPager from '@/components/monitor/LogPager.vue'
 import SegmentedButton from '@/components/m3/SegmentedButton.vue'
 import LineChart, { type ChartSeries } from '@/components/monitor/LineChart.vue'
 import * as svc from '@/api/services'
 import type { SpeedHistoryIface, SpeedRange } from '@/api/services'
 import { useAction } from '@/composables/action'
 import { useConfirm } from '@/composables/confirm'
+import { usePaged } from '@/composables/paged'
 import { usePoll } from '@/composables/poll'
 import { luciUrl } from '@/nav'
 import { useUi } from '@/stores/ui'
 
-// Monitoring -> Speed test: the latest result and the schedule, the history
-// graphs (every test, by hand or scheduled: download, upload and latency per
-// uplink, in the Uptime and Sites tabs' colours), and the results the router
-// keeps, newest first. Running one is the app-wide speed test dialog; the
-// schedule is set on LuCI's page (the Settings button), how many results are
-// kept and where under Storage. Polled every 15 s, so a test run from the
-// dialog, or by the schedule, shows up here when it's done.
+// Monitoring -> Speed test, all of it for the period chosen at the top, like
+// the other tabs: the overview (each uplink's averages, with the latest result
+// and the schedule), the graphs (download, upload and latency per uplink, in
+// the Uptime and Sites tabs' colours) and the log of every test, by hand or
+// scheduled. Running one is the app-wide speed test dialog; the schedule is
+// set on LuCI's page (the Settings button), how many results are kept and
+// where under Storage. Polled every 15 s, so a test run from the dialog, or
+// by the schedule, shows up here when it's done.
 const ui = useUi()
 const router = useRouter()
 const { ask } = useConfirm()
@@ -90,11 +93,15 @@ const seriesOf = (k: Key): ChartSeries[] =>
 const mb = (v: number) => (v >= 100 ? v.toFixed(0) : v.toFixed(1))
 const ms = (v: number) => v.toFixed(0)
 
+// ---- the log: every test of the period, with the kept result's details when there is one ----
+const log = computed(() =>
+  (h.value?.log ?? []).map(([t, iface, ok, down, up, lat, auto]) => ({ t, iface, ok, down, up, lat, auto, rec: results.value.find((r) => r.started === t) ?? null })),
+)
+const logPage = usePaged(log, () => range.value)
+
 const kept = computed(() => {
   const p = s.value?.persist
-  const n = s.value?.keep ?? 10
-  if (p?.enabled) return `The last ${n} are kept on ${p.path}, saved after every test.`
-  return `The last ${n} are kept in RAM, and go at the next reboot.`
+  return p?.enabled ? `Every test, saved on ${p.path}.` : 'Every test, kept in RAM: they go at the next reboot.'
 })
 
 async function clear(): Promise<void> {
@@ -117,13 +124,21 @@ async function clear(): Promise<void> {
     <template v-if="s">
       <v-alert v-if="!s.installed" type="warning" variant="tonal" rounded="xl">The Ookla speedtest program isn’t installed on the router.</v-alert>
 
-      <section class="hk-card" aria-label="Latest result">
+      <div class="hk-mon-bar">
+        <SegmentedButton v-model="range" :options="RANGES" label="Period" class="hk-mon-range" />
+      </div>
+
+      <!-- Overview: each uplink over the period, the latest result, the schedule -->
+      <section class="hk-card" aria-label="Overview">
         <div class="d-flex align-center ga-3 flex-wrap">
           <div class="d-flex flex-column flex-grow-1" style="min-width: 0">
-            <h2 class="hk-h2">Latest result</h2>
+            <h2 class="hk-h2">Speed</h2>
             <span class="hk-label">
-              <template v-if="s.running">A test is running…</template>
-              <template v-else-if="latest">{{ when(latest.started) }} over {{ label(latest.interface) }}<template v-if="latest.isp"> · {{ latest.isp }}</template></template>
+              <template v-if="s.running">{{ s.run?.auto ? 'A scheduled test is running…' : 'A test is running…' }}</template>
+              <template v-else-if="latest">
+                Latest {{ when(latest.started) }} over {{ label(latest.interface) }} · ↓ {{ mbps(latest.download) }} ↑ {{ mbps(latest.upload) }} Mbps ·
+                {{ latest.latency?.toFixed(0) ?? '—' }} ms
+              </template>
               <template v-else>No tests yet</template>
             </span>
           </div>
@@ -131,54 +146,39 @@ async function clear(): Promise<void> {
             <HkIcon name="speed" :size="18" class="mr-2" />{{ s.running ? 'Show the test' : 'Run speed test' }}
           </v-btn>
         </div>
-        <div class="hk-sp-sched">
-          <HkIcon name="refresh" :size="18" />
-          <div class="d-flex flex-column flex-grow-1" style="min-width: 0">
-            <span style="font-size: 14px">{{ s.running && s.run?.auto ? 'A scheduled test is running' : schedLine }}</span>
-            <span v-if="schedCost" class="hk-label">{{ schedCost }}</span>
-          </div>
-          <v-btn :href="luciUrl('admin/monitoring/speedtest')" variant="text" height="36">{{ sched?.enabled ? 'Change' : 'Schedule' }}</v-btn>
-        </div>
-        <div class="hk-sp-grid">
-          <div class="hk-tile">
-            <span class="hk-label">Download</span>
-            <span class="hk-display" style="font-size: 34px">{{ mbps(latest?.download) }}</span>
-            <span class="hk-label">Mbps</span>
-          </div>
-          <div class="hk-tile">
-            <span class="hk-label">Upload</span>
-            <span class="hk-display" style="font-size: 34px">{{ mbps(latest?.upload) }}</span>
-            <span class="hk-label">Mbps</span>
-          </div>
-          <div class="hk-tile">
-            <span class="hk-label">Latency</span>
-            <span class="hk-display" style="font-size: 34px">{{ latest?.latency?.toFixed(0) ?? '—' }}</span>
-            <span class="hk-label">ms</span>
-          </div>
-        </div>
-      </section>
-
-      <section class="hk-card" aria-label="History">
-        <div class="d-flex align-center ga-3 flex-wrap">
-          <div class="d-flex flex-column flex-grow-1" style="min-width: 0">
-            <h2 class="hk-h2">History</h2>
-            <span class="hk-label">Every test, by hand or scheduled</span>
-          </div>
-          <SegmentedButton v-model="range" :options="RANGES" label="Period" class="hk-mon-range" />
-        </div>
 
         <div v-if="tested.length" class="hk-sp-sum">
           <div v-for="w in tested" :key="w.name" class="hk-tile">
             <span class="d-flex align-center" style="font-size: 14px; font-weight: 600"><span class="hk-dot mr-2" :style="{ background: colorOf(w.name) }" />{{ w.label }}</span>
             <span v-if="w.summary.download" style="font-size: 15px; font-variant-numeric: tabular-nums">
-              ↓ <b>{{ mb(w.summary.download.avg) }}</b> ↑ <b>{{ w.summary.upload ? mb(w.summary.upload.avg) : '—' }}</b> Mbps · <b>{{ w.summary.latency ? ms(w.summary.latency.avg) : '—' }}</b> ms
+              ↓ <b>{{ mb(w.summary.download.avg) }}</b> ↑ <b>{{ w.summary.upload ? mb(w.summary.upload.avg) : '—' }}</b> Mbps ·
+              <b>{{ w.summary.latency ? ms(w.summary.latency.avg) : '—' }}</b> ms
             </span>
             <span v-else style="font-size: 14px">No test got through</span>
-            <span class="hk-label">{{ w.tests }} test{{ w.tests === 1 ? '' : 's' }}<template v-if="w.failed">, {{ w.failed }} failed</template><template v-if="w.summary.download"> · ↓ {{ mb(w.summary.download.min) }}–{{ mb(w.summary.download.max) }} Mbps</template></span>
+            <span class="hk-label"
+              >{{ w.tests }} test{{ w.tests === 1 ? '' : 's' }}<template v-if="w.failed">, {{ w.failed }} failed</template
+              ><template v-if="w.summary.download"> · ↓ {{ mb(w.summary.download.min) }}–{{ mb(w.summary.download.max) }} Mbps</template></span
+            >
           </div>
         </div>
-        <p v-else-if="h" class="hk-label" style="margin: 0">No tests in this period yet.</p>
+        <p v-else-if="h" class="hk-label" style="margin: 0">No tests in this period.</p>
 
+        <div class="hk-sp-sched">
+          <HkIcon name="refresh" :size="18" />
+          <div class="d-flex flex-column flex-grow-1" style="min-width: 0">
+            <span style="font-size: 14px">{{ schedLine }}</span>
+            <span v-if="schedCost" class="hk-label">{{ schedCost }}</span>
+          </div>
+          <v-btn :href="luciUrl('admin/monitoring/speedtest')" variant="text" height="36">{{ sched?.enabled ? 'Change' : 'Schedule' }}</v-btn>
+        </div>
+      </section>
+
+      <!-- The graphs -->
+      <section class="hk-card" aria-label="Over time">
+        <div class="hk-mon-head">
+          <h2 class="hk-h2">Over time</h2>
+          <span class="hk-label">average per bucket, range shaded</span>
+        </div>
         <div v-if="h" class="hk-sp-charts">
           <div>
             <div class="hk-sp-ct">Download</div>
@@ -196,36 +196,44 @@ async function clear(): Promise<void> {
         <v-skeleton-loader v-else-if="!hist.error.value" type="image" bg-color="transparent" />
       </section>
 
-      <section class="hk-card" aria-label="Results">
-        <div class="d-flex align-center ga-3">
-          <div class="d-flex flex-column flex-grow-1" style="min-width: 0">
-            <h2 class="hk-h2">Results</h2>
-            <span class="hk-label">{{ kept }}</span>
-          </div>
+      <!-- The log: every test of the period -->
+      <section class="hk-card" aria-label="Tests" style="gap: 8px">
+        <div class="hk-mon-head">
+          <h2 class="hk-h2">Tests</h2>
+          <span v-if="log.length" class="hk-label">{{ log.length }} in this period</span>
         </div>
+        <span class="text-muted" style="font-size: 13px">{{ kept }} The ISP, server and speedtest.net link are kept for the last {{ s.keep ?? 10 }}.</span>
 
-        <div v-if="results.length" class="hk-group">
-          <div v-for="r in results" :key="r.started" class="hk-sp-row">
-            <div class="d-flex flex-column flex-grow-1" style="min-width: 0">
-              <span style="font-size: 14px; font-weight: 600">{{ when(r.started) }} · {{ label(r.interface) }}</span>
-              <span v-if="r.ok" class="hk-label hk-sp-where">{{ [r.auto ? 'Scheduled' : '', r.isp, r.server, r.location].filter(Boolean).join(' · ') }}</span>
-              <span v-else class="text-error" style="font-size: 13px">Failed: {{ r.error || 'no result' }}</span>
+        <template v-if="log.length">
+          <div class="hk-group">
+            <div v-for="e in logPage.visible.value" :key="`${e.t}${e.iface}`" class="hk-sp-row">
+              <span class="hk-dot" :style="{ background: colorOf(e.iface) }" />
+              <div class="d-flex flex-column flex-grow-1" style="min-width: 0">
+                <span style="font-size: 14px; font-weight: 600">{{ when(e.t) }} · {{ label(e.iface) }}</span>
+                <span v-if="e.ok" class="hk-label hk-sp-where">{{
+                  [e.auto ? 'Scheduled' : 'By hand', e.rec?.isp, e.rec?.server, e.rec?.location].filter(Boolean).join(' · ')
+                }}</span>
+                <span v-else class="text-error" style="font-size: 13px">{{
+                  e.rec ? `Failed: ${e.rec.error || 'no result'}` : e.auto ? 'Didn’t run: the uplink was down, or out of data allowance' : 'Failed'
+                }}</span>
+              </div>
+              <div v-if="e.ok" class="hk-sp-nums">
+                <span title="Download">↓ {{ e.down != null ? mb(e.down) : '—' }}</span>
+                <span title="Upload">↑ {{ e.up != null ? mb(e.up) : '—' }}</span>
+                <span class="hk-label">Mbps · {{ e.lat != null ? ms(e.lat) : '—' }} ms</span>
+              </div>
+              <v-btn v-if="e.rec?.url" :href="e.rec.url" target="_blank" rel="noopener" icon variant="text" size="small" aria-label="Open the result on speedtest.net">
+                <HkIcon name="advanced" :size="18" />
+              </v-btn>
             </div>
-            <div v-if="r.ok" class="hk-sp-nums">
-              <span title="Download">↓ {{ mbps(r.download) }}</span>
-              <span title="Upload">↑ {{ mbps(r.upload) }}</span>
-              <span class="hk-label">Mbps · {{ r.latency?.toFixed(0) ?? '—' }} ms</span>
-            </div>
-            <v-btn v-if="r.url" :href="r.url" target="_blank" rel="noopener" icon variant="text" size="small" aria-label="Open the result on speedtest.net">
-              <HkIcon name="advanced" :size="18" />
-            </v-btn>
           </div>
-        </div>
-        <p v-else class="hk-label" style="margin: 0">No results kept yet. Run a test, and it shows up here.</p>
+          <LogPager :p="logPage" label="Tests" />
+        </template>
+        <span v-else-if="h" class="text-muted" style="font-size: 14px">No tests in this period.</span>
 
         <div class="d-flex flex-wrap justify-end ga-2">
           <v-btn variant="text" height="40" @click="router.replace({ query: { tab: 'storage' } })">Where they’re kept</v-btn>
-          <v-btn v-if="results.length" variant="text" color="error" height="40" :loading="busy.clear" :disabled="s.running" @click="clear">Clear results</v-btn>
+          <v-btn v-if="results.length || log.length" variant="text" color="error" height="40" :loading="busy.clear" :disabled="s.running" @click="clear">Clear</v-btn>
         </div>
       </section>
     </template>
@@ -234,15 +242,6 @@ async function clear(): Promise<void> {
 </template>
 
 <style scoped>
-.hk-sp-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-}
-.hk-sp-grid .hk-tile {
-  padding: 14px 16px;
-  gap: 6px;
-}
 .hk-sp-sched {
   display: flex;
   align-items: center;

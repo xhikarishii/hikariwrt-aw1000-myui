@@ -170,8 +170,10 @@ export interface SpeedHistory {
   to: number
   step: number
   ts: number[]
-  /** every uplink in multiwan's order (the other Monitoring pages' colours), then any other tested */
+  /** every IPv4 uplink in multiwan's order (the other Monitoring pages' colours), then any other tested */
   ifaces: SpeedHistoryIface[]
+  /** every test of the period, newest first: started, uplink, ok, download and upload Mbps, latency ms, scheduled */
+  log: [number, string, boolean, number | null, number | null, number | null, boolean][]
 }
 
 export const speedInterfaces = () =>
