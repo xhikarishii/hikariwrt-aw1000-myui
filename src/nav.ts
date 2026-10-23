@@ -27,6 +27,7 @@ export const NAV: NavItem[] = [
   { name: 'monitoring', path: '/monitoring', title: 'Monitoring', icon: 'chart', phase: 0, luci: 'admin/monitoring/uptime', requires: 'luci.aw1000-monitor', keywords: 'uptime latency ping packet loss jitter outage quality traffic usage signal rsrp rsrq sinr rssi band cell 5g lte history storage speed test speedtest download upload ookla' },
   { name: 'cellular', path: '/cellular', title: 'Cellular', icon: 'cellular', primary: true, phase: 0, luci: 'admin/modem/status', requires: 'luci.aw1000-modem', keywords: '5g lte modem signal sim' },
   { name: 'wifi', path: '/wifi', title: 'Wireless', icon: 'wifi', phase: 0, luci: 'admin/network/wireless', keywords: 'wi-fi wifi ssid password 5 ghz 2.4 ghz guest' },
+  { name: 'networks', path: '/networks', title: 'Networks', icon: 'networks', phase: 0, luci: 'admin/network/network', keywords: 'vlan 802.1q tagged untagged trunk port lan iot smart home guest subnet isolation network segment' },
   { name: 'clients', path: '/clients', title: 'Clients', icon: 'clients', primary: true, phase: 0, luci: 'admin/network/dhcp', keywords: 'devices dhcp leases' },
   { name: 'vpn', path: '/vpn', title: 'VPN', icon: 'vpn', phase: 0, luci: 'admin/vpn/wireguard', requires: 'luci.aw1000-vpn', keywords: 'wireguard tunnel' },
   { name: 'mesh', path: '/mesh', title: 'Mesh', icon: 'mesh', phase: 0, luci: 'admin/network/mesh', requires: 'luci.aw1000-mesh', keywords: '802.11s backhaul' },

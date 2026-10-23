@@ -273,6 +273,8 @@ export interface WifiAp {
   ssid: string
   network: string
   disabled: boolean
+  /** on Home (network lan): the main Wi-Fi bands */
+  main: boolean
   guest: boolean
 }
 
@@ -291,7 +293,8 @@ export async function wifiAps(): Promise<WifiAp[]> {
         ssid: String(s.ssid ?? ''),
         network: net,
         disabled: s.disabled === '1' || radio?.disabled === '1',
-        guest: /guest/i.test(net) || /guest/i.test(s['.name']),
+        main: net === 'lan',
+        guest: net !== 'lan' && (/guest/i.test(net) || /guest/i.test(s['.name'])),
       }
     })
 }

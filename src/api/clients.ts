@@ -5,14 +5,14 @@
 
 import { call, UbusError } from './ubus'
 import * as uci from './uci'
-import { blockSection, mergeClients, type ApInfo, type Client, type HostSection } from '@/utils/clients'
+import { blockSection, mergeClients, type ApInfo, type Client, type ClientNet, type HostSection } from '@/utils/clients'
 
 interface WirelessStatus {
   [radio: string]: { config: { band?: string }; interfaces: { section: string; ifname?: string; config: { mode: string; network?: string[] | string } }[] }
 }
 
 export async function loadClients(): Promise<Client[]> {
-  const [leases, hints, dhcp, fw, wl, guestIface, lanIface] = await Promise.all([
+  const [leases, hints, dhcp, fw, wl, guestIface, lanIface, net, meta] = await Promise.all([
     call<{ dhcp_leases: { hostname?: string; macaddr: string; ipaddr?: string; expires?: number }[] }>('luci-rpc', 'getDHCPLeases'),
     call<Record<string, { name?: string; ipaddrs?: string[] }>>('luci-rpc', 'getHostHints'),
     uci.getConfig('dhcp'),
@@ -20,6 +20,8 @@ export async function loadClients(): Promise<Client[]> {
     call<WirelessStatus>('network.wireless', 'status'),
     uci.getSection('network', 'guest').catch(() => null),
     uci.getSection('network', 'lan').catch(() => null),
+    uci.getConfig('network'),
+    uci.getConfig('hikariui').catch(() => ({}) as Record<string, uci.UciSection>),
   ])
 
   const hosts: HostSection[] = Object.values(dhcp)
@@ -54,9 +56,19 @@ export async function loadClients(): Promise<Client[]> {
 
   const prefix = (s: uci.UciSection | null) => (s?.ipaddr ? String(s.ipaddr).split('/')[0]!.split('.').slice(0, 3).join('.') : null)
   const gp = prefix(guestIface)
-  const local = [prefix(lanIface), gp].filter((p): p is string => !!p)
-  const self = [lanIface?.ipaddr, guestIface?.ipaddr].filter(Boolean).map((a) => String(a).split('/')[0]!)
-  return mergeClients({ leases: leases.dhcp_leases ?? [], hints, hosts, aps, blocked, guestPrefix: gp, localPrefixes: local, selfIps: self })
+  // Every bridged network besides Home (guest, and the Networks page's):
+  // its devices are clients too, labelled with the network.
+  const nets: ClientNet[] = Object.values(net)
+    .filter((s) => s['.type'] === 'interface' && s['.name'] !== 'lan' && s.proto === 'static' && String(s.device ?? '').startsWith('br-') && prefix(s))
+    .map((s) => {
+      const id = s['.name']
+      const m = meta[`net_${id}`]
+      const zone = Object.values(fw).find((z) => z['.type'] === 'zone' && (Array.isArray(z.network) ? z.network : String(z.network ?? '').split(/\s+/)).includes(id))
+      return { id, label: String(m?.label ?? (id === 'guest' ? 'Guest' : id)), prefix: prefix(s)!, zone: String(zone?.name ?? id), guest: id === 'guest' || m?.kind === 'guest' }
+    })
+  const local = [prefix(lanIface), gp, ...nets.map((n) => n.prefix)].filter((p): p is string => !!p)
+  const self = [lanIface?.ipaddr, guestIface?.ipaddr, ...nets.map((n) => `${n.prefix}.1`)].filter(Boolean).map((a) => String(a).split('/')[0]!)
+  return mergeClients({ leases: leases.dhcp_leases ?? [], hints, hosts, aps, blocked, guestPrefix: gp, localPrefixes: [...new Set(local)], selfIps: self, nets })
 }
 
 async function staged(config: string, fn: () => Promise<void>): Promise<void> {
@@ -103,7 +115,7 @@ export async function setBlocked(c: Client, blocked: boolean): Promise<void> {
         config: 'firewall',
         type: 'rule',
         name: section,
-        values: { name: `Block ${c.name ?? c.mac}`, src: c.guest ? 'guest' : 'lan', src_mac: c.mac, dest: 'wan', proto: 'all', target: 'REJECT' },
+        values: { name: `Block ${c.name ?? c.mac}`, src: c.network?.zone ?? (c.guest ? 'guest' : 'lan'), src_mac: c.mac, dest: 'wan', proto: 'all', target: 'REJECT' },
       })
     } else {
       await call('uci', 'delete', { config: 'firewall', section }).catch((e: unknown) => {

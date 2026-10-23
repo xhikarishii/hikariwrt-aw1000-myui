@@ -5,14 +5,28 @@ import HkIcon from '@/components/icons/HkIcon.vue'
 import AddTunnelDialog from '@/components/vpn/AddTunnelDialog.vue'
 import TunnelCard from '@/components/vpn/TunnelCard.vue'
 import * as vpn from '@/api/vpn'
+import { loadClients } from '@/api/clients'
+import * as uci from '@/api/uci'
 import { usePoll } from '@/composables/poll'
+import type { Client } from '@/utils/clients'
 
 // VPN: WireGuard tunnels. The list is polled every 10 s for handshakes and
 // traffic; cards keep your unsaved routing edits across refreshes.
 const list = usePoll(() => vpn.list(), 10000)
 const nets = ref<vpn.VpnNetworks | null>(null)
 const adding = ref(false)
-onMounted(async () => (nets.value = await vpn.networks().catch(() => null)))
+// For picking devices and naming networks: the clients the router knows, and
+// the names given to networks on the Networks page.
+const clients = ref<Client[]>([])
+const netLabels = ref<Record<string, string>>({})
+onMounted(async () => {
+  const [n, c, ui] = await Promise.all([vpn.networks().catch(() => null), loadClients().catch(() => []), uci.getConfig('hikariui').catch(() => ({}))])
+  nets.value = n
+  clients.value = c
+  const labels: Record<string, string> = {}
+  for (const sec of Object.values(ui)) if (sec['.type'] === 'network' && sec['.name'].startsWith('net_') && sec.label) labels[sec['.name'].slice(4)] = String(sec.label)
+  netLabels.value = labels
+})
 
 const tunnels = computed(() => list.data.value?.tunnels ?? [])
 const up = computed(() => tunnels.value.filter((t) => t.enabled && t.up).length)
@@ -48,7 +62,7 @@ const everyoneOwner = (name: string) => {
   </section>
 
   <div v-else class="hk-grid-3" style="align-items: start">
-    <TunnelCard v-for="t in tunnels" :key="t.name" :tunnel="t" :nets="nets" :everyone-owner="everyoneOwner(t.name)" @changed="list.refresh()" />
+    <TunnelCard v-for="t in tunnels" :key="t.name" :tunnel="t" :nets="nets" :clients="clients" :net-labels="netLabels" :everyone-owner="everyoneOwner(t.name)" @changed="list.refresh()" />
     <template v-if="!list.data.value && !list.error.value">
       <v-skeleton-loader v-for="i in 2" :key="i" type="heading, text@6" class="hk-card" />
     </template>

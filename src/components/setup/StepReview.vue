@@ -73,6 +73,13 @@ const rows = computed<Row[]>(() => {
     changed: c.wifi || c.country,
     step: 'wifi',
   })
+  const nets = (['guest', 'iot'] as const)
+    .filter((k) => d.networks[k].on && d.networks[k].spec)
+    .map((k) => {
+      const n = d.networks[k].spec!
+      return `${k === 'guest' ? 'Guests' : 'Smart home'}${n.wifi.enabled ? ` “${n.wifi.ssid}”` : ''} (${n.prefix}.0/24)`
+    })
+  r.push({ icon: 'networks', title: 'More networks', value: nets.length ? nets.join(' · ') : 'None added', changed: c.networks, step: 'networks' })
   const sd = d.storage
   const o = s.offer.value
   if (s.offers.value.length || c.storage) {

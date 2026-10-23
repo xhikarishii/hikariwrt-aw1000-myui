@@ -54,8 +54,9 @@ const dirty = computed(() => {
 
 const connection = computed(() => {
   const c = props.client
-  if (c.link === 'wifi') return `${c.guest ? 'Guest ' : ''}Wi-Fi ${BAND[c.band ?? ''] ?? ''}`.trim()
-  if (c.link === 'wired') return c.guest ? 'Guest network' : 'Wired or mesh'
+  const net = c.network?.label ?? (c.guest ? 'Guest' : '')
+  if (c.link === 'wifi') return `${net ? `${net} · ` : ''}Wi-Fi ${BAND[c.band ?? ''] ?? ''}`.trim()
+  if (c.link === 'wired') return net ? `${net} network` : 'Wired or mesh'
   return 'Not seen recently'
 })
 const vendorText = computed(() => {

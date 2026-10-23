@@ -33,16 +33,19 @@ import { speedStatus, type SpeedStatus } from '@/api/services'
 import { driveOffers, driveTitle, firstPartition, needsFormat } from '@/utils/drive'
 import { markSetupDone, wanCarrier } from '@/api/setup'
 import { useSession } from '@/stores/session'
-import { dnsError, ipError, keyError, macError, mtuError, netmaskError, normalizeMac, parseList, ssidError } from '@/utils/validate'
+import { dnsError, generatePassword, ipError, keyError, macError, mtuError, netmaskError, normalizeMac, parseList, ssidError } from '@/utils/validate'
+import { contextFor, loadNetworks, saveNetwork, type NetworksData } from '@/api/networks'
+import { freeId, isLegacyGuestFree, LAN_PORTS, pickFreePrefix, preset, validate as validateNetwork, type Errors as NetErrors, type NetworkSpec } from '@/utils/networks'
 import { countryByIso, guessCountry } from '@/utils/countries'
 
-export type StepId = 'welcome' | 'password' | 'system' | 'internet' | 'wifi' | 'storage' | 'review'
+export type StepId = 'welcome' | 'password' | 'system' | 'internet' | 'wifi' | 'networks' | 'storage' | 'review'
 export const STEPS: { id: StepId; title: string; lead: string }[] = [
   { id: 'welcome', title: 'Welcome', lead: 'A few minutes to get your router ready. Nothing changes until the last step.' },
   { id: 'password', title: 'Admin password', lead: 'Protects these settings. You’ll use it to sign in here, in LuCI and over SSH.' },
   { id: 'system', title: 'Name, country and time', lead: 'What the router is called on your network, and where it is. The country sets which Wi-Fi channels are allowed.' },
   { id: 'internet', title: 'Internet', lead: 'How the router connects: a cable from your ISP, the 5G SIM, or both.' },
   { id: 'wifi', title: 'Wi-Fi', lead: 'The network your devices join.' },
+  { id: 'networks', title: 'More networks', lead: 'Optional: a network for visitors, and one for smart-home devices, each kept apart from your own.' },
   { id: 'storage', title: 'Storage', lead: 'A USB drive or SD card for the history your router keeps.' },
   { id: 'review', title: 'Review', lead: 'Check everything, then set it up.' },
 ]
@@ -101,6 +104,8 @@ export function useSetup() {
     monStorage: null as monitor.StorageInfo | null,
     usage: null as modem.UsageInfo | null,
     speed: null as SpeedStatus | null,
+    /** Home, the networks made so far, ports (for the Networks step) */
+    networks: null as NetworksData | null,
   })
 
   // What the router is set up as now: standalone when multi-WAN has the wired
@@ -138,12 +143,21 @@ export function useSetup() {
      * `touched` stops a drive plugged in later from changing a choice made.
      */
     storage: { use: false, disk: '', format: false, monitoring: true, usage: true, touched: false, old: 'keep' as 'keep' | 'fresh' },
+    /**
+     * The Networks step: a guest and a smart-home network to create. `spec`
+     * is null when the router already has one of that kind (made on the
+     * Networks page or earlier), and the step says so instead.
+     */
+    networks: {
+      guest: { on: false, spec: null as NetworkSpec | null },
+      iot: { on: false, spec: null as NetworkSpec | null },
+    },
   })
 
   async function load(): Promise<void> {
     loading.value = true
     try {
-      const [s, z, w, r, p, m, c, mw, v6, wp, wm, dr, ms, us, sp] = await Promise.all([
+      const [s, z, w, r, p, m, c, mw, v6, wp, wm, dr, ms, us, sp, nw] = await Promise.all([
         sys.systemSettings().catch(() => null),
         sys.timezones().catch(() => ({})),
         wanConfig(),
@@ -159,10 +173,12 @@ export function useSetup() {
         session.has('luci.aw1000-monitor') ? monitor.storage().catch(() => null) : Promise.resolve(null),
         hasModem.value ? modem.usageinfo().catch(() => null) : Promise.resolve(null),
         session.has('luci.aw1000-speedtest') ? speedStatus().catch(() => null) : Promise.resolve(null),
+        loadNetworks().catch(() => null),
       ])
       Object.assign(orig, {
         system: s, wan: w, radios: r, profile: p?.ok ? p : null, modem: m, multiwan: mw, ipv6: v6?.ok ? v6 : null, wanPort: wp, wanMac: wm,
         drives: dr?.ok ? dr : null, monStorage: ms?.ok ? ms : null, usage: us?.ok ? us : null, speed: sp?.ok && sp.persist ? sp : null,
+        networks: nw,
       })
       carriers.value = orig.profile?.carriers ?? []
       zones.value = z
@@ -171,6 +187,7 @@ export function useSetup() {
       fill('system')
       fill('internet')
       fill('wifi')
+      fill('networks')
       fill('storage')
       loadError.value = ''
     } catch (e) {
@@ -230,8 +247,29 @@ export function useSetup() {
         old: 'keep',
       })
     }
+    if (step === 'networks') {
+      const d = o.networks
+      const has = (kind: string) => !!d?.model.networks.some((n) => n.kind === kind)
+      const used = [...(d?.prefixes ?? []), ...(d?.model.networks.map((n) => n.prefix) ?? [])]
+      const taken = new Set([...(d?.ids ?? []), ...(d?.model.networks.map((n) => n.id) ?? [])])
+      const ctx = (prefix: string) => ({
+        hostname: draft.system.hostname || o.system?.hostname || 'HikariWrt',
+        radios: d?.radios ?? [],
+        prefix,
+        password: generatePassword(),
+      })
+      let guest: NetworkSpec | null = null
+      if (d && !has('guest')) {
+        const legacy = isLegacyGuestFree(d.snapshot)
+        const id = legacy ? 'guest' : freeId('guest', taken)
+        guest = { ...preset('guest', id, ctx(pickFreePrefix(used))), ...(legacy ? { legacy: true } : {}) }
+        taken.add(id)
+      }
+      const iot = d && !has('iot') ? preset('iot', freeId('iot', taken), ctx(pickFreePrefix([...used, ...(guest ? [guest.prefix] : [])]))) : null
+      Object.assign(draft.networks, { guest: { on: false, spec: guest }, iot: { on: false, spec: iot } })
+    }
     if (step === 'wifi') {
-      const aps = o.radios.flatMap((radio) => radio.networks.filter((n) => !n.guest).map((n) => ({ radio, n })))
+      const aps = o.radios.flatMap((radio) => radio.networks.filter((n) => n.main).map((n) => ({ radio, n })))
       draft.wifi.bands = aps.map(({ radio, n }) => ({
         section: n.section,
         band: radio.band,
@@ -328,12 +366,36 @@ export function useSetup() {
     return { ssid: null, key: null, bands: w.bands.map((b) => ({ ssid: ssidError(b.ssid), key: keyError(b.key, b.encryption) })) }
   })
 
+  // Each network against the router, and the two against each other: not the
+  // same port untagged in both, and Home keeps a port.
+  const networkErrors = computed(() => {
+    const d = orig.networks
+    const n = draft.networks
+    const out: { guest: NetErrors; iot: NetErrors } = { guest: {}, iot: {} }
+    if (!d) return out
+    for (const k of ['guest', 'iot'] as const) {
+      const spec = n[k].spec
+      if (n[k].on && spec) out[k] = validateNetwork(spec, d.model, contextFor(d, spec, true))
+    }
+    const g = n.guest.on ? n.guest.spec : null
+    const i = n.iot.on ? n.iot.spec : null
+    if (g && i) {
+      const both = LAN_PORTS.filter((p) => g.ports[p] === 'untagged' && i.ports[p] === 'untagged')
+      if (both.length) out.iot.ports = `${both.map((p) => `LAN ${p.slice(3)}`).join(', ')} can’t be untagged in both networks`
+      else if (LAN_PORTS.every((p) => g.ports[p] === 'untagged' || i.ports[p] === 'untagged' || !d.model.home.ports.includes(p)))
+        out.iot.ports = 'Keep at least one port on your Home network'
+      if (g.vid != null && g.vid === i.vid) out.iot.vid = 'The guest network uses this VLAN ID'
+    }
+    return out
+  })
+
   const valid = computed<Record<StepId, boolean>>(() => ({
     welcome: true,
     password: !passwordErrors.value.a && !passwordErrors.value.b,
     system: /^[A-Za-z0-9][A-Za-z0-9-]{0,62}$/.test(draft.system.hostname) && draft.system.zonename in zones.value && !!countryByIso(draft.system.country),
     internet: Object.values(wanErrors.value).every((e) => !e) && !apnError.value,
     wifi: !wifiErrors.value.ssid && !wifiErrors.value.key && wifiErrors.value.bands.every((b) => !b.ssid && !b.key),
+    networks: !Object.keys(networkErrors.value.guest).length && !Object.keys(networkErrors.value.iot).length,
     storage:
       !draft.storage.use ||
       (!!offer.value &&
@@ -406,6 +468,7 @@ export function useSetup() {
       ipv6: hasModem.value && !!o.ipv6 && draft.v6style !== (o.ipv6.config.style || 'dual'),
       country: !!draft.system.country && o.radios.some((r) => (r.country || '').toUpperCase() !== draft.system.country),
       wifi,
+      networks: (draft.networks.guest.on && !!draft.networks.guest.spec) || (draft.networks.iot.on && !!draft.networks.iot.spec),
       storage: storageChanges.value.any,
     }
   })
@@ -596,6 +659,20 @@ export function useSetup() {
           },
         })
     }
+    // Each network on its own, re-reading the router first (the one before
+    // it changed it). Each applies with rollback: a port move that cuts this
+    // browser off is undone by the router.
+    for (const k of ['guest', 'iot'] as const) {
+      const n = draft.networks[k]
+      if (!n.on || !n.spec) continue
+      const spec = n.spec
+      t.push({
+        id: `net-${k}`,
+        label: `Set up the ${k === 'guest' ? 'guest' : 'smart-home'} network${spec.wifi.enabled ? ` “${spec.wifi.ssid}”` : ''}`,
+        state: 'pending',
+        run: async () => saveNetwork(await loadNetworks(), spec),
+      })
+    }
     t.push({ id: 'done', label: 'Remember that setup is finished', state: 'pending', run: () => markSetupDone() })
     if (c.wifi || c.country) {
       const country = draft.system.country
@@ -653,7 +730,7 @@ export function useSetup() {
 
   return {
     loading, loadError, load, fill, orig, zones, carrier, hasModem, hasUsage, carriers, draft,
-    passwordErrors, wanErrors, apnError, wifiErrors, valid, changes, wifiNext, macNext,
+    passwordErrors, wanErrors, apnError, wifiErrors, networkErrors, valid, changes, wifiNext, macNext,
     offers, offer, refreshDrives, storageTarget, storageChanges, oldHistory,
     tasks, applying, finished, apply, retry,
   }

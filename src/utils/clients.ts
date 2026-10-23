@@ -51,10 +51,23 @@ export interface Client {
   lease: number | null
   ifname: string | null
   host: HostSection | null
+  /** The network it is on, other than Home (a guest or smart-home network); null on Home. */
+  network: ClientNet | null
   reserved: boolean
   blocked: boolean
   /** Locally administered MAC: phones' per-network "private address". */
   randomMac: boolean
+}
+
+/** A network other than Home, as the Networks page made it (or the guest network). */
+export interface ClientNet {
+  id: string
+  label: string
+  /** first three octets */
+  prefix: string
+  /** its firewall zone (blocking a device names it as the source) */
+  zone: string
+  guest: boolean
 }
 
 export interface ClientSources {
@@ -73,6 +86,8 @@ export interface ClientSources {
   localPrefixes: string[]
   /** The router's own addresses (LAN, guest): it lists itself in the hints. */
   selfIps?: string[]
+  /** Networks other than Home: a client in one is labelled with it. */
+  nets?: ClientNet[]
 }
 
 const up = (m: string) => m.toUpperCase()
@@ -92,7 +107,7 @@ export function mergeClients(s: ClientSources): Client[] {
       c = {
         mac: k, name: null, ip: null, link: 'unknown', band: null, guest: false, online: false,
         signal: null, rxRate: null, txRate: null, rxBytes: null, txBytes: null, connected: null,
-        lease: null, ifname: null, host: null, reserved: false, blocked: false, randomMac: isRandomMac(k),
+        lease: null, ifname: null, host: null, network: null, reserved: false, blocked: false, randomMac: isRandomMac(k),
       }
       all.set(k, c)
     }
@@ -151,6 +166,11 @@ export function mergeClients(s: ClientSources): Client[] {
     }
     if (c.link === 'unknown' && c.ip) c.link = 'wired'
     if (s.guestPrefix && c.ip?.startsWith(`${s.guestPrefix}.`)) c.guest = true
+    const net = c.ip ? s.nets?.find((n) => c.ip!.startsWith(`${n.prefix}.`)) : undefined
+    if (net) {
+      c.network = net
+      if (net.guest) c.guest = true
+    }
     c.blocked = s.blocked.has(c.mac)
   }
   // Online Wi-Fi first, then by name.

@@ -44,7 +44,7 @@ const vpnLabel = computed(() => {
   return tunnel.value.up ? 'Connected' : 'Connecting'
 })
 
-const bands = computed(() => (props.aps ?? []).filter((a) => !a.guest))
+const bands = computed(() => (props.aps ?? []).filter((a) => a.main))
 const bandsOn = computed(() => bands.value.filter((a) => !a.disabled).length)
 
 async function onWifi(): Promise<void> {

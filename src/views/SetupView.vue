@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import SetupFrame from '@/components/setup/SetupFrame.vue'
 import StepApply from '@/components/setup/StepApply.vue'
 import StepInternet from '@/components/setup/StepInternet.vue'
+import StepNetworks from '@/components/setup/StepNetworks.vue'
 import StepPassword from '@/components/setup/StepPassword.vue'
 import StepReview from '@/components/setup/StepReview.vue'
 import StepStorage from '@/components/setup/StepStorage.vue'
@@ -87,6 +88,7 @@ function onKey(e: KeyboardEvent): void {
       <StepSystem v-else-if="stage === 'system'" :s="s" />
       <StepInternet v-else-if="stage === 'internet'" :s="s" />
       <StepWifi v-else-if="stage === 'wifi'" :s="s" />
+      <StepNetworks v-else-if="stage === 'networks'" :s="s" />
       <StepStorage v-else-if="stage === 'storage'" :s="s" />
       <StepReview v-else-if="stage === 'review'" :s="s" @go="go" />
       <StepApply v-else :s="s" @back="go('review', false)" @home="router.replace('/')" />

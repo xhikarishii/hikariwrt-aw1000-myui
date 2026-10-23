@@ -61,3 +61,32 @@ it('helpers', () => {
   expect(signalWord(-80)).toBe('Weak')
   expect(blockSection('00:C3:F4:0F:59:B9')).toBe('hikari_block_00c3f40f59b9')
 })
+
+describe('mergeClients with other networks', () => {
+  const nets = [
+    { id: 'iot', label: 'Smart home', prefix: '192.168.90', zone: 'iot', guest: false },
+    { id: 'guest2', label: 'Visitors', prefix: '192.168.91', zone: 'guest2', guest: true },
+  ]
+  it('keeps devices of every network, labelled with it', () => {
+    const out = mergeClients({
+      hints: {},
+      hosts: [],
+      aps: [],
+      blocked: new Set<string>(),
+      guestPrefix: null,
+      leases: [
+        { macaddr: 'aa:bb:cc:00:00:01', ipaddr: '192.168.90.120', hostname: 'plug' },
+        { macaddr: 'aa:bb:cc:00:00:02', ipaddr: '192.168.91.130', hostname: 'visitor' },
+        { macaddr: 'aa:bb:cc:00:00:03', ipaddr: '192.168.88.140', hostname: 'laptop' },
+      ],
+      localPrefixes: ['192.168.88', '192.168.90', '192.168.91'],
+      nets,
+    })
+    const by = (n: string) => out.find((c) => c.name === n)!
+    expect(by('plug').network?.label).toBe('Smart home')
+    expect(by('plug').guest).toBe(false)
+    expect(by('visitor').network?.zone).toBe('guest2')
+    expect(by('visitor').guest).toBe(true)
+    expect(by('laptop').network).toBeNull()
+  })
+})

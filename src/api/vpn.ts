@@ -28,6 +28,8 @@ export interface Tunnel {
   egress: string
   src_net: string[]
   src_addr: string[]
+  /** Devices routed by MAC (lower case), whatever address they have. */
+  src_mac: string[]
   addresses: string[]
   peers: VpnPeer[]
 }
@@ -68,12 +70,19 @@ export const enable = (name: string, on: boolean) => call<Reply>('luci.aw1000-vp
 
 /**
  * Whose traffic uses the tunnel: off (nobody; the tunnel is only a link),
- * selected (these networks and/or addresses), all (every local network).
- * The kill switch drops that traffic while the tunnel is down instead of
- * letting it leak out of the WAN.
+ * selected (these networks, devices by MAC and/or addresses), all (every
+ * local network). The kill switch drops that traffic while the tunnel is
+ * down instead of letting it leak out of the WAN.
  */
-export const route = (name: string, mode: RouteMode, nets: string[], addrs: string[], killswitch: boolean) =>
-  call<Reply>('luci.aw1000-vpn', 'route', { name, mode, networks: nets.join(' '), addresses: addrs.join(' '), killswitch: killswitch ? '1' : '0' })
+export const route = (name: string, mode: RouteMode, nets: string[], addrs: string[], killswitch: boolean, macs: string[] = []) =>
+  call<Reply>('luci.aw1000-vpn', 'route', {
+    name,
+    mode,
+    networks: nets.join(' '),
+    addresses: addrs.join(' '),
+    killswitch: killswitch ? '1' : '0',
+    clients: macs.join(' '),
+  })
 
 /** "auto" follows multi-WAN's primary uplink; a name pins the tunnel to it. */
 export const egress = (name: string, iface: string) => call<Reply>('luci.aw1000-vpn', 'egress', { name, iface })

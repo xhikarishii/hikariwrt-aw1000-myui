@@ -40,6 +40,8 @@ const emit = defineEmits<{ 'update:modelValue': [value: T] }>()
   align-items: center;
   justify-content: center;
   gap: 6px;
+  padding: 0 12px;
+  white-space: nowrap;
   border: 0;
   background: transparent;
   color: rgb(var(--v-theme-on-surface));

@@ -24,7 +24,10 @@ const list = usePoll(loadClients, 10000)
 const stats = usePoll(() => clientStats().catch(() => null), 5000)
 const trafficOf = (c: Client) => stats.data.value?.clients[c.mac] ?? null
 
-type Filter = 'all' | 'wifi' | 'wired' | 'guest' | 'blocked'
+type Filter = 'all' | 'wifi' | 'wired' | 'others' | 'blocked'
+// Not on Home: the guest network, or one made on the Networks page.
+const elsewhere = (c: Client) => !!c.network || c.guest
+const netLabel = (c: Client) => c.network?.label ?? (c.guest ? 'Guest' : '')
 const filter = ref<Filter>('all')
 const query = ref('')
 const BAND: Record<string, string> = { '2g': '2.4 GHz', '5g': '5 GHz', '6g': '6 GHz' }
@@ -34,7 +37,7 @@ const counts = computed(() => ({
   all: clients.value.length,
   wifi: clients.value.filter((c) => c.link === 'wifi').length,
   wired: clients.value.filter((c) => c.link === 'wired').length,
-  guest: clients.value.filter((c) => c.guest).length,
+  others: clients.value.filter(elsewhere).length,
   blocked: clients.value.filter((c) => c.blocked).length,
 }))
 const FILTERS = computed(() =>
@@ -43,7 +46,7 @@ const FILTERS = computed(() =>
       ['all', 'All'],
       ['wifi', 'Wi-Fi'],
       ['wired', 'Wired'],
-      ['guest', 'Guests'],
+      ['others', 'Other networks'],
       ['blocked', 'Blocked'],
     ] as [Filter, string][]
   ).filter(([f]) => f === 'all' || counts.value[f] > 0),
@@ -53,7 +56,7 @@ const shown = computed(() => {
   return clients.value.filter((c) => {
     if (filter.value === 'wifi' && c.link !== 'wifi') return false
     if (filter.value === 'wired' && c.link !== 'wired') return false
-    if (filter.value === 'guest' && !c.guest) return false
+    if (filter.value === 'others' && !elsewhere(c)) return false
     if (filter.value === 'blocked' && !c.blocked) return false
     return !q || `${c.name ?? ''} ${c.ip ?? ''} ${c.mac}`.toLowerCase().includes(q)
   })
@@ -61,8 +64,8 @@ const shown = computed(() => {
 
 function line(c: Client): string {
   const parts = [c.ip ?? 'no address']
-  if (c.link === 'wifi') parts.push(`${c.guest ? 'Guest · ' : ''}${BAND[c.band ?? ''] ?? 'Wi-Fi'}`, `${signalWord(c.signal)} ${signed(c.signal)} dBm`)
-  else if (c.link === 'wired') parts.push(c.guest ? 'Guest' : 'Wired')
+  if (c.link === 'wifi') parts.push(`${netLabel(c) ? `${netLabel(c)} · ` : ''}${BAND[c.band ?? ''] ?? 'Wi-Fi'}`, `${signalWord(c.signal)} ${signed(c.signal)} dBm`)
+  else if (c.link === 'wired') parts.push(netLabel(c) || 'Wired')
   return parts.join(' · ')
 }
 

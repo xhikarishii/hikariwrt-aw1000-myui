@@ -25,7 +25,7 @@ const ORDER: Record<string, number> = { '6g': 0, '5g': 1, '2g': 2 }
 
 const rows = computed(() =>
   (props.aps ?? [])
-    .filter((a) => !a.guest)
+    .filter((a) => a.main)
     .sort((a, b) => (ORDER[a.band] ?? 9) - (ORDER[b.band] ?? 9))
     .map((a) => ({
       ...a,

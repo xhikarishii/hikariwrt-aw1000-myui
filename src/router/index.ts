@@ -12,6 +12,7 @@ const BUILT: Record<string, () => Promise<unknown>> = {
   internet: () => import('@/views/InternetView.vue'),
   monitoring: () => import('@/views/MonitorView.vue'),
   wifi: () => import('@/views/WirelessView.vue'),
+  networks: () => import('@/views/NetworksView.vue'),
   clients: () => import('@/views/ClientsView.vue'),
   vpn: () => import('@/views/VpnView.vue'),
   mesh: () => import('@/views/MeshView.vue'),

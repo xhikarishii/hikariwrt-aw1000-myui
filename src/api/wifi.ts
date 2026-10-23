@@ -14,6 +14,8 @@ export interface WifiNetwork {
   network: string
   ifname: string | null
   clients: number
+  /** on Home (network lan): a main Wi-Fi band; others belong to Networks */
+  main: boolean
   guest: boolean
 }
 
@@ -73,7 +75,8 @@ export async function wifiRadios(): Promise<WifiRadio[]> {
             network: net,
             ifname,
             clients: assoc.results.length,
-            guest: /guest/i.test(net) || /guest/i.test(a['.name']),
+            main: net === 'lan',
+            guest: net !== 'lan' && (/guest/i.test(net) || /guest/i.test(a['.name'])),
           }
         }),
       )

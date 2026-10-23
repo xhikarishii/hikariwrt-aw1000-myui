@@ -23,8 +23,10 @@
 .v-theme--dark {
   color-scheme: dark;
 }
-/* Themed scrollbars (Firefox and Chromium both honour scrollbar-color). */
-.v-application * {
+/* Themed scrollbars (Firefox and Chromium both honour scrollbar-color).
+   Dialogs and menus are teleported outside .v-application. */
+.v-application *,
+.v-overlay-container * {
   scrollbar-color: rgba(var(--v-theme-on-surface), 0.28) transparent;
   scrollbar-width: thin;
 }

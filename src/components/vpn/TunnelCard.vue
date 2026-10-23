@@ -8,16 +8,22 @@ import type { RouteMode, Tunnel, VpnNetworks } from '@/api/vpn'
 import { useAction } from '@/composables/action'
 import { useConfirm } from '@/composables/confirm'
 import { useNotify } from '@/composables/notify'
+import type { Client } from '@/utils/clients'
 import { bytes, duration } from '@/utils/format'
 import { uplinkLabel } from '@/utils/uplinks'
 import { parseList } from '@/utils/validate'
 
-// One WireGuard tunnel: on/off, whose traffic uses it, which uplink it rides,
-// the peer's state, and removal. aw1000-vpn does the routing and firewall
-// work (and the NSS flow flush) behind each call.
+// One WireGuard tunnel: on/off, whose traffic uses it (networks, devices by
+// MAC, addresses), which uplink it rides, the peer's state, and removal.
+// aw1000-vpn does the routing and firewall work (and the NSS flow flush)
+// behind each call.
 const props = defineProps<{
   tunnel: Tunnel
   nets: VpnNetworks | null
+  /** Devices the router knows, to pick from. */
+  clients: Client[]
+  /** Network names from the Networks page, by network id. */
+  netLabels: Record<string, string>
   /** Label of the other tunnel that routes everyone, if any: only one can. */
   everyoneOwner?: string | null
 }>()
@@ -26,26 +32,48 @@ const { busy, run } = useAction()
 const { ask } = useConfirm()
 const notify = useNotify()
 
-const form = reactive({ mode: 'off' as RouteMode, nets: [] as string[], addrs: '', killswitch: false, egress: 'auto' })
+const form = reactive({ mode: 'off' as RouteMode, nets: [] as string[], macs: [] as string[], addrs: '', killswitch: false, egress: 'auto' })
 function reset(): void {
   const t = props.tunnel
-  Object.assign(form, { mode: t.route_mode, nets: [...t.src_net], addrs: t.src_addr.join(', '), killswitch: t.killswitch, egress: t.egress || 'auto' })
+  Object.assign(form, {
+    mode: t.route_mode,
+    nets: [...t.src_net],
+    macs: [...(t.src_mac ?? [])],
+    addrs: t.src_addr.join(', '),
+    killswitch: t.killswitch,
+    egress: t.egress || 'auto',
+  })
 }
 // Reset from the saved values only when they change, not on every 10 s
 // refresh (a new object each time), or unsaved edits would vanish.
 watch(
-  () => JSON.stringify([props.tunnel.route_mode, props.tunnel.src_net, props.tunnel.src_addr, props.tunnel.killswitch, props.tunnel.egress]),
+  () => JSON.stringify([props.tunnel.route_mode, props.tunnel.src_net, props.tunnel.src_mac, props.tunnel.src_addr, props.tunnel.killswitch, props.tunnel.egress]),
   reset,
   { immediate: true },
 )
 
+const same = (a: string[], b: string[]) => a.slice().sort().join() === b.slice().sort().join()
 const routeDirty = computed(() => {
   const t = props.tunnel
   return (
     form.mode !== t.route_mode ||
     form.killswitch !== t.killswitch ||
-    (form.mode === 'selected' && (form.nets.slice().sort().join() !== t.src_net.slice().sort().join() || parseList(form.addrs).join() !== t.src_addr.join()))
+    (form.mode === 'selected' && (!same(form.nets, t.src_net) || !same(form.macs, t.src_mac ?? []) || parseList(form.addrs).join() !== t.src_addr.join()))
   )
+})
+const nothingPicked = computed(() => form.mode === 'selected' && !form.nets.length && !form.macs.length && !parseList(form.addrs).length)
+
+const netLabel = (id: string) => (id === 'lan' ? 'Home' : (props.netLabels[id] ?? (id === 'guest' ? 'Guest' : id)))
+// Every known device, plus any picked one the router no longer sees, so a
+// saved choice never silently disappears from the list.
+const deviceItems = computed(() => {
+  const items = props.clients.map((c) => ({
+    value: c.mac.toLowerCase(),
+    title: c.name ?? c.mac,
+    subtitle: [c.ip, netLabel(c.network?.id ?? 'lan'), c.online ? null : 'offline'].filter(Boolean).join(' · '),
+  }))
+  for (const m of form.macs) if (!items.some((i) => i.value === m)) items.push({ value: m, title: m.toUpperCase(), subtitle: 'not seen lately' })
+  return items
 })
 const egressDirty = computed(() => form.egress !== (props.tunnel.egress || 'auto'))
 
@@ -81,7 +109,7 @@ async function saveRoute(): Promise<void> {
     if (!ok) return
   }
   const t = props.tunnel
-  if (await run('route', async () => reply(await vpn.route(t.name, form.mode, form.nets, parseList(form.addrs), form.killswitch)), 'Routing saved')) emit('changed')
+  if (await run('route', async () => reply(await vpn.route(t.name, form.mode, form.nets, parseList(form.addrs), form.killswitch, form.macs)), 'Routing saved')) emit('changed')
 }
 
 async function saveEgress(): Promise<void> {
@@ -130,7 +158,7 @@ async function removeIt(): Promise<void> {
       <p class="hk-label mt-2" style="margin: 0">
         <template v-if="form.mode === 'off'">The tunnel is up but no traffic is sent through it.</template>
         <template v-else-if="form.mode === 'all'">Every device on your networks goes through the VPN.</template>
-        <template v-else>Only the networks and addresses you pick go through the VPN.</template>
+        <template v-else>Only the networks and devices you pick go through the VPN. Everything else, and traffic between your own networks, goes the usual way.</template>
       </p>
       <p v-if="everyoneOwner" class="hk-label mt-1" style="margin: 0">
         Everyone already goes through {{ everyoneOwner }}, and only one tunnel can route everyone. Devices or networks you pick here use this tunnel instead.
@@ -138,6 +166,7 @@ async function removeIt(): Promise<void> {
     </div>
 
     <template v-if="form.mode === 'selected'">
+      <div class="hk-label">Networks</div>
       <div class="d-flex flex-wrap ga-2" role="group" aria-label="Networks">
         <button
           v-for="n in nets?.networks ?? []"
@@ -148,10 +177,32 @@ async function removeIt(): Promise<void> {
           :aria-pressed="form.nets.includes(n.name) ? 'true' : 'false'"
           @click="form.nets = form.nets.includes(n.name) ? form.nets.filter((x) => x !== n.name) : [...form.nets, n.name]"
         >
-          <HkIcon v-if="form.nets.includes(n.name)" name="check" :size="16" :stroke="2.6" />{{ n.name === 'lan' ? 'Home network' : n.name === 'guest' ? 'Guest network' : n.name }}
+          <HkIcon v-if="form.nets.includes(n.name)" name="check" :size="16" :stroke="2.6" />{{ netLabel(n.name) }}
         </button>
       </div>
-      <v-text-field v-model="form.addrs" label="Or single devices (addresses)" placeholder="192.168.88.214, 192.168.88.50" persistent-placeholder hide-details />
+      <v-autocomplete
+        v-model="form.macs"
+        :items="deviceItems"
+        item-props
+        :filter-keys="['title', 'raw.subtitle', 'raw.value']"
+        label="Devices"
+        placeholder="Pick devices"
+        hint="Chosen by the device, so it stays in the VPN when its address changes"
+        persistent-hint
+        multiple
+        chips
+        closable-chips
+        clear-on-select
+        auto-select-first
+      />
+      <v-text-field
+        v-model="form.addrs"
+        label="Addresses or ranges"
+        placeholder="192.168.88.214, 192.168.89.0/24"
+        hint="For devices with a fixed address, or part of a network"
+        persistent-hint
+      />
+      <p v-if="nothingPicked" class="text-error" style="font-size: 13px; margin: 0">Pick a network, a device or an address.</p>
     </template>
 
     <div v-if="form.mode !== 'off'" class="d-flex align-center ga-3">
@@ -164,7 +215,7 @@ async function removeIt(): Promise<void> {
 
     <div class="d-flex justify-end ga-2">
       <v-btn variant="text" color="primary" height="40" :disabled="!routeDirty" @click="reset">Undo changes</v-btn>
-      <v-btn variant="flat" color="primary" height="40" :disabled="!routeDirty" :loading="busy.route" @click="saveRoute">Save routing</v-btn>
+      <v-btn variant="flat" color="primary" height="40" :disabled="!routeDirty || nothingPicked" :loading="busy.route" @click="saveRoute">Save routing</v-btn>
     </div>
 
     <div class="d-flex align-center ga-3">
