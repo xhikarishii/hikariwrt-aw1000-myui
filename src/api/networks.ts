@@ -6,15 +6,19 @@
 import { call, UbusError } from './ubus'
 import * as uci from './uci'
 import {
+  buildPortOps,
   buildRemoveOps,
   buildSaveOps,
   movesPorts,
   names,
   parseModel,
   prefixOf,
+  suggestedVids,
+  type LanPort,
   type Model,
   type NetworkSpec,
   type Op,
+  type PortProfile,
   type Snapshot,
   type ValidateContext,
 } from '@/utils/networks'
@@ -69,13 +73,17 @@ export function contextFor(d: NetworksData, spec: NetworkSpec, isNew: boolean): 
   const own = d.model.networks.find((n) => n.id === spec.id)
   const ownPrefix = own?.prefix
   const n = names(spec.id, spec.legacy)
+  const sugg = suggestedVids(d.model)
   const apsPerRadio: Record<string, number> = {}
   for (const w of Object.values(d.snapshot.wireless))
     if (w['.type'] === 'wifi-iface' && w.mode === 'ap' && w.network !== spec.id) apsPerRadio[String(w.device)] = (apsPerRadio[String(w.device)] ?? 0) + 1
   return {
     takenIds: new Set(d.ids.filter((x) => x !== spec.id && x !== n.zoneName)),
     usedPrefixes: new Set(d.prefixes.filter((p) => p !== ownPrefix)),
-    usedVids: new Set(d.model.networks.filter((x) => x.id !== spec.id && x.vid != null).map((x) => x.vid!)),
+    // other networks' IDs, and the ones networks made before IDs existed will get
+    usedVids: new Set(
+      d.model.networks.filter((x) => x.id !== spec.id).flatMap((x) => (x.vid != null ? [x.vid] : x.id in sugg ? [sugg[x.id]!] : [])),
+    ),
     apsPerRadio,
     isNew,
   }
@@ -118,6 +126,11 @@ async function run(ops: Op[], portMove: boolean): Promise<void> {
 export async function saveNetwork(d: NetworksData, spec: NetworkSpec): Promise<void> {
   const ntpServer = spec.kind === 'iot' && spec.iot.ntp && !d.ntpServer
   await run(buildSaveOps(d.snapshot, d.model, spec, { ntpServer }), movesPorts(d.model, spec))
+}
+
+/** Change what one LAN port carries: its untagged network, tagged networks, trunk. */
+export async function savePort(d: NetworksData, port: LanPort, profile: PortProfile): Promise<void> {
+  await run(buildPortOps(d.snapshot, d.model, port, profile, suggestedVids(d.model)), true)
 }
 
 export async function removeNetwork(d: NetworksData, id: string): Promise<void> {

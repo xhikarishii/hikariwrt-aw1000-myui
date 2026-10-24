@@ -15,7 +15,9 @@ import {
   LAN_PORTS,
   movesPorts,
   pickFreePrefix,
+  pickVid,
   preset,
+  suggestedVids,
   validate,
   type NetKind,
   type NetworkSpec,
@@ -43,7 +45,9 @@ const KINDS: { kind: NetKind; icon: 'guest' | 'iot' | 'shield' | 'networks' }[] 
 
 watch(open, (o) => {
   if (!o) return
-  spec.value = props.edit ? structuredClone(JSON.parse(JSON.stringify(props.edit))) : null
+  spec.value = props.edit ? JSON.parse(JSON.stringify(props.edit)) : null
+  // made before networks had a VLAN ID: saving gives it the suggested one
+  if (spec.value && spec.value.vid == null) spec.value.vid = suggestedVids(props.data.model)[spec.value.id] ?? null
 })
 
 function start(kind: NetKind): void {
@@ -52,12 +56,16 @@ function start(kind: NetKind): void {
   const taken = new Set([...d.ids, ...d.model.networks.map((n) => n.id)])
   const id = legacy ? 'guest' : freeId(kind, taken)
   const used = [...d.prefixes, ...d.model.networks.map((n) => n.prefix)]
+  const prefix = pickFreePrefix(used)
+  const vids = [...d.model.networks.flatMap((n) => (n.vid != null ? [n.vid] : [])), ...Object.values(suggestedVids(d.model))]
   spec.value = {
     ...preset(kind, id, {
       hostname: session.board?.hostname ?? 'HikariWrt',
       radios: d.radios,
-      prefix: pickFreePrefix(used),
+      prefix,
       password: generatePassword(),
+      vid: pickVid(prefix, vids),
+      trunkPorts: LAN_PORTS.filter((p) => d.model.portMeta[p].trunk),
     }),
     ...(legacy ? { legacy: true } : {}),
   }
@@ -73,8 +81,10 @@ async function save(): Promise<void> {
   const moves = movesPorts(props.data.model, s)
   const bands = s.wifi.enabled ? s.wifi.radios.map((r) => BAND[props.data.radios.find((x) => x.name === r)?.band ?? ''] ?? r).join(' and ') : ''
   const untagged = LAN_PORTS.filter((p) => s.ports[p] === 'untagged').map((p) => `LAN ${p.slice(3)}`)
+  const tagged = LAN_PORTS.filter((p) => s.ports[p] === 'tagged').map((p) => `LAN ${p.slice(3)}`)
   const lines = [
-    isNew.value ? `Creates “${s.label}” with addresses ${s.prefix}.x.` : `Saves “${s.label}”.`,
+    isNew.value ? `Creates “${s.label}” as VLAN ${s.vid}, with addresses ${s.prefix}.x.` : `Saves “${s.label}” (VLAN ${s.vid}).`,
+    tagged.length ? `${tagged.join(', ')} ${tagged.length === 1 ? 'carries' : 'carry'} it tagged as VLAN ${s.vid}: set the same on the switch or access point there.` : '',
     s.wifi.enabled ? `Wi-Fi “${s.wifi.ssid}” on ${bands}: Wi-Fi on those bands restarts, and devices on it drop for a few seconds.` : '',
     untagged.length ? `${untagged.join(', ')} ${untagged.length === 1 ? 'joins' : 'join'} this network: whatever is plugged in there gets a new address.` : '',
     moves
@@ -111,7 +121,7 @@ async function save(): Promise<void> {
             <HkIcon name="chevronRight" :size="18" />
           </button>
         </div>
-        <NetworkForm v-else v-model="spec" :errors="errors" :radios="data.radios" :model="data.model" />
+        <NetworkForm v-else v-model="spec" :errors="errors" :radios="data.radios" :model="data.model" :fresh="isNew" />
       </v-card-text>
 
       <v-card-actions v-if="spec" class="pa-5 pt-2">

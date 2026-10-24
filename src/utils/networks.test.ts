@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { UciSection } from '@/api/uci'
 import {
   baseDevice,
+  buildPortOps,
   buildRemoveOps,
   buildSaveOps,
   freeId,
@@ -10,8 +11,13 @@ import {
   parseModel,
   parseVlanDev,
   pickFreePrefix,
+  pickVid,
+  portProfile,
   preset,
+  suggestedVids,
   validate,
+  validatePort,
+  vidForPrefix,
   type NetworkSpec,
   type Op,
   type Snapshot,
@@ -72,6 +78,7 @@ const iotPreset = () =>
     ],
     prefix: '192.168.90',
     password: 'longpassword',
+    vid: 90,
   })
 
 const find = (ops: Op[], config: string, section: string) => ops.filter((o) => o.config === config && o.section === section)
@@ -139,7 +146,7 @@ describe('presets', () => {
   })
 
   it('isolates guests, trusts trusted', () => {
-    const c = { hostname: 'R', radios: [{ name: 'radio0', band: '2g' }], prefix: '192.168.91', password: 'p' }
+    const c = { hostname: 'R', radios: [{ name: 'radio0', band: '2g' }], prefix: '192.168.91', password: 'p', vid: 91 }
     expect(preset('guest', 'guest', c).wifi.isolate).toBe(true)
     expect(preset('trusted', 'home2', c).access).toEqual({ internet: true, router: true, toHome: true, fromHome: true })
   })
@@ -165,7 +172,9 @@ describe('validate', () => {
     const e = validate(p, m, ctx())
     expect(e.id).toBeTruthy()
     expect(e.prefix).toMatch(/Another network/)
-    expect(e.vid).toMatch(/2 to 4094/)
+    expect(e.vid).toMatch(/VLAN 1 is Home/)
+    expect(validate({ ...p, vid: null }, m, ctx()).vid).toMatch(/2 to 4094/)
+    expect(validate({ ...p, vid: 4095 }, m, ctx()).vid).toMatch(/2 to 4094/)
     expect(validate({ ...p, id: '9x', prefix: '8.8.8' }, m, ctx()).prefix).toMatch(/private/)
     expect(validate({ ...p, id: 'cams', prefix: '192.168.95', vid: 40 }, m, ctx({ usedVids: new Set([40]) })).vid).toMatch(/Another network/)
   })
@@ -302,5 +311,114 @@ describe('port moves', () => {
     expect(movesPorts(m, g)).toBe(false)
     expect(movesPorts(m, { ...g, ports: { ...g.ports, lan4: 'untagged' } })).toBe(true)
     expect(homePortsAfter(m, { ...g, ports: { ...g.ports, lan4: 'untagged' } })).toEqual(['lan1', 'lan2', 'lan3'])
+  })
+})
+
+describe('VLAN IDs', () => {
+  it('follow the subnet, never 1, and fall back to a free one', () => {
+    expect(vidForPrefix('192.168.90')).toBe(90)
+    expect(vidForPrefix('10.40.0')).toBe(40)
+    expect(vidForPrefix('192.168.1')).toBeNull()
+    expect(pickVid('192.168.90', [])).toBe(90)
+    expect(pickVid('192.168.90', [90])).toBe(10)
+    expect(pickVid('192.168.1', [10, 11])).toBe(12)
+  })
+
+  it('suggests IDs for networks made before they had one, clear of the rest', () => {
+    const s = routerSnapshot()
+    Object.assign(s.network, conf(
+      sec('hikari_net_iot_dev', 'device', { name: 'br-iot', type: 'bridge', bridge_empty: '1' }),
+      sec('iot', 'interface', { proto: 'static', device: 'br-iot', ipaddr: '192.168.90.1' }),
+    ))
+    s.hikariui.net_iot = sec('net_iot', 'network', { label: 'IoT', kind: 'iot' })
+    const m = parseModel(s)
+    // the live router's networks parse as before, without an ID
+    expect(m.networks.map((n) => n.vid)).toEqual([null, null])
+    expect(suggestedVids(m)).toEqual({ guest: 89, iot: 90 })
+  })
+
+  it('saving a network writes its VLAN ID', () => {
+    const s = routerSnapshot()
+    const m = parseModel(s)
+    const ops = buildSaveOps(s, m, { ...m.networks[0]!, vid: 89 })
+    expect(find(ops, 'hikariui', 'net_guest')[0]).toMatchObject({ op: 'add', values: { vid: '89' } })
+  })
+})
+
+describe('port profiles', () => {
+  // Home on every port, guest (no ID yet) and a smart-home network with VLAN 90
+  function withIot(): Snapshot {
+    const s = routerSnapshot()
+    Object.assign(s.network, conf(
+      sec('hikari_net_iot_dev', 'device', { name: 'br-iot', type: 'bridge', bridge_empty: '1' }),
+      sec('iot', 'interface', { proto: 'static', device: 'br-iot', ipaddr: '192.168.90.1' }),
+    ))
+    s.hikariui.net_iot = sec('net_iot', 'network', { label: 'IoT', kind: 'iot', vid: '90' })
+    return s
+  }
+
+  it('reads a port: untagged Home, nothing tagged', () => {
+    const m = parseModel(withIot())
+    expect(portProfile(m, 'lan3')).toEqual({ native: 'lan', tagged: [], trunk: false })
+  })
+
+  it('moves a port to another network untagged', () => {
+    const s = withIot()
+    const m = parseModel(s)
+    const ops = buildPortOps(s, m, 'lan3', { native: 'iot', tagged: [], trunk: false })
+    expect(find(ops, 'network', 'hikari_net_iot_dev')).toEqual([{ op: 'set', config: 'network', section: 'hikari_net_iot_dev', values: { ports: ['lan3'] } }])
+    expect(find(ops, 'network', 'cfg030f15')).toEqual([{ op: 'set', config: 'network', section: 'cfg030f15', values: { ports: ['lan1', 'lan2', 'lan4'] } }])
+    expect(find(ops, 'hikariui', 'port_lan3')).toEqual([])
+  })
+
+  it('makes a trunk: every network tagged, and an ID saved for one that had none', () => {
+    const s = withIot()
+    const m = parseModel(s)
+    const ops = buildPortOps(s, m, 'lan4', { native: 'lan', tagged: [], trunk: true }, suggestedVids(m))
+    expect(find(ops, 'network', 'hikari_net_iot_dev')[0]).toMatchObject({ values: { ports: ['lan4.90'] } })
+    expect(find(ops, 'network', 'hikari_guest_dev')[0]).toMatchObject({ values: { ports: ['lan4.89'] } })
+    expect(find(ops, 'hikariui', 'net_guest')[0]).toMatchObject({ op: 'add', values: { vid: '89' } })
+    expect(find(ops, 'hikariui', 'port_lan4')[0]).toMatchObject({ op: 'add', type: 'port', values: { trunk: '1' } })
+    // Home keeps lan4 untagged
+    expect(find(ops, 'network', 'cfg030f15')).toEqual([])
+    expect(JSON.stringify(ops)).not.toMatch(/vlan_filtering|bridge-vlan|lan\d:[ut]/)
+  })
+
+  it('a port with no untagged network leaves Home and keeps its tags', () => {
+    const s = withIot()
+    const m = parseModel(s)
+    const ops = buildPortOps(s, m, 'lan4', { native: 'none', tagged: ['iot'], trunk: false })
+    expect(find(ops, 'network', 'cfg030f15')[0]).toMatchObject({ values: { ports: ['lan1', 'lan2', 'lan3'] } })
+    expect(find(ops, 'network', 'hikari_net_iot_dev')[0]).toMatchObject({ values: { ports: ['lan4.90'] } })
+    expect(find(ops, 'hikariui', 'port_lan4')[0]).toMatchObject({ values: { native: 'none' } })
+    // once applied, the profile reads back and Home no longer claims lan4
+    s.network.cfg030f15!.ports = 'lan1 lan2 lan3'
+    s.network.hikari_net_iot_dev!.ports = ['lan4.90']
+    s.hikariui.port_lan4 = sec('port_lan4', 'port', { native: 'none' })
+    const after = parseModel(s)
+    expect(portProfile(after, 'lan4')).toEqual({ native: 'none', tagged: ['iot'], trunk: false })
+    expect(homePortsAfter(after, null)).toEqual(['lan1', 'lan2', 'lan3'])
+  })
+
+  it('a new network starts tagged on trunk ports; leaving one off ends the trunk', () => {
+    const s = withIot()
+    s.hikariui.port_lan4 = sec('port_lan4', 'port', { trunk: '1' })
+    const m = parseModel(s)
+    const p = preset('custom', 'cams', { hostname: 'R', radios: [], prefix: '192.168.95', password: 'longpassword', vid: 95, trunkPorts: ['lan4'] })
+    expect(p.ports.lan4).toBe('tagged')
+    expect(find(buildSaveOps(s, m, p), 'hikariui', 'port_lan4')).toEqual([])
+    const off = buildSaveOps(s, m, { ...p, ports: { ...p.ports, lan4: 'off' } })
+    expect(find(off, 'hikariui', 'port_lan4')).toEqual([{ op: 'delete', config: 'hikariui', section: 'port_lan4' }])
+  })
+
+  it('keeps a port on Home and refuses ports bridged elsewhere', () => {
+    const s = withIot()
+    s.network.cfg030f15!.ports = 'lan1'
+    s.network.cfgabc = sec('cfgabc', 'device', { name: 'br-cams', type: 'bridge', ports: ['lan2'] })
+    s.network.hikari_net_iot_dev!.ports = ['lan3', 'lan4']
+    const m = parseModel(s)
+    expect(validatePort(m, 'lan1', { native: 'iot', tagged: [], trunk: false })).toMatch(/Home/)
+    expect(validatePort(m, 'lan2', { native: 'lan', tagged: [], trunk: false })).toMatch(/br-cams/)
+    expect(validatePort(m, 'lan1', { native: 'lan', tagged: ['iot'], trunk: false })).toBeNull()
   })
 })

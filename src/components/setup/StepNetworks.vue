@@ -45,7 +45,7 @@ const CARDS = [
       <p v-if="!n[c.key].spec && existing(c.kind)" class="hk-label" style="margin: 0">
         “{{ existing(c.kind)!.label }}” ({{ existing(c.kind)!.prefix }}.0/24) is already on the router. Change it on the Networks page.
       </p>
-      <NetworkForm v-if="n[c.key].on && n[c.key].spec" v-model="n[c.key].spec!" :errors="s.networkErrors.value[c.key]" :radios="data.radios" :model="data.model" compact />
+      <NetworkForm v-if="n[c.key].on && n[c.key].spec" v-model="n[c.key].spec!" :errors="s.networkErrors.value[c.key]" :radios="data.radios" :model="data.model" compact fresh />
     </div>
     <p class="hk-label" style="margin: 0 4px">More networks, and VLANs for a managed switch or access point, can be added any time on the Networks page.</p>
   </template>

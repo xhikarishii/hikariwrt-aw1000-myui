@@ -35,7 +35,7 @@ import { markSetupDone, wanCarrier } from '@/api/setup'
 import { useSession } from '@/stores/session'
 import { dnsError, generatePassword, ipError, keyError, macError, mtuError, netmaskError, normalizeMac, parseList, ssidError } from '@/utils/validate'
 import { contextFor, loadNetworks, saveNetwork, type NetworksData } from '@/api/networks'
-import { freeId, isLegacyGuestFree, LAN_PORTS, pickFreePrefix, preset, validate as validateNetwork, type Errors as NetErrors, type NetworkSpec } from '@/utils/networks'
+import { freeId, isLegacyGuestFree, LAN_PORTS, pickFreePrefix, pickVid, preset, suggestedVids, validate as validateNetwork, type Errors as NetErrors, type NetworkSpec } from '@/utils/networks'
 import { countryByIso, guessCountry } from '@/utils/countries'
 
 export type StepId = 'welcome' | 'password' | 'system' | 'internet' | 'wifi' | 'networks' | 'storage' | 'review'
@@ -252,12 +252,20 @@ export function useSetup() {
       const has = (kind: string) => !!d?.model.networks.some((n) => n.kind === kind)
       const used = [...(d?.prefixes ?? []), ...(d?.model.networks.map((n) => n.prefix) ?? [])]
       const taken = new Set([...(d?.ids ?? []), ...(d?.model.networks.map((n) => n.id) ?? [])])
-      const ctx = (prefix: string) => ({
-        hostname: draft.system.hostname || o.system?.hostname || 'HikariWrt',
-        radios: d?.radios ?? [],
-        prefix,
-        password: generatePassword(),
-      })
+      // VLAN IDs in use, counting the ones older networks will get when next saved
+      const vids = d ? [...d.model.networks.flatMap((n) => (n.vid != null ? [n.vid] : [])), ...Object.values(suggestedVids(d.model))] : []
+      const ctx = (prefix: string) => {
+        const vid = pickVid(prefix, vids)
+        vids.push(vid)
+        return {
+          hostname: draft.system.hostname || o.system?.hostname || 'HikariWrt',
+          radios: d?.radios ?? [],
+          prefix,
+          password: generatePassword(),
+          vid,
+          trunkPorts: d ? LAN_PORTS.filter((p) => d.model.portMeta[p].trunk) : [],
+        }
+      }
       let guest: NetworkSpec | null = null
       if (d && !has('guest')) {
         const legacy = isLegacyGuestFree(d.snapshot)

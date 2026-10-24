@@ -1,15 +1,15 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import HkIcon from '@/components/icons/HkIcon.vue'
 import M3Switch from '@/components/m3/M3Switch.vue'
 import SecretField from '@/components/m3/SecretField.vue'
 import SegmentedButton from '@/components/m3/SegmentedButton.vue'
 import { generatePassword } from '@/utils/validate'
-import { LAN_PORTS, type Errors, type LanPort, type Model, type NetworkSpec, type PortMode } from '@/utils/networks'
+import { LAN_PORTS, pickVid, suggestedVids, vidForPrefix, type Errors, type LanPort, type Model, type NetworkSpec, type PortMode } from '@/utils/networks'
 
-// One network's settings: name and range, its Wi-Fi, which LAN ports carry
-// it (untagged: the port leaves Home and joins this network; tagged: the
-// port stays on Home and carries this network as VLAN <id> too, for a
+// One network's settings: name, range and VLAN ID, its Wi-Fi, which LAN
+// ports carry it (untagged: the port's own network, it leaves Home; tagged:
+// the port keeps its network and carries this one as VLAN <id> too, for a
 // managed switch or an access point), what it may reach, and - for a smart
 // home network - the settings IoT devices connect best with. Edits the spec
 // in place; the dialog or wizard step around it saves.
@@ -20,6 +20,8 @@ const props = defineProps<{
   model: Model | null
   /** the wizard's shorter form: no range or advanced access */
   compact?: boolean
+  /** a network being made: its VLAN ID follows the range until typed in */
+  fresh?: boolean
 }>()
 
 const BAND: Record<string, string> = { '2g': '2.4 GHz', '5g': '5 GHz', '6g': '6 GHz' }
@@ -48,17 +50,42 @@ function ownerOf(p: LanPort): string {
   if (foreign) return foreign.name
   return 'Home'
 }
+const trunk = (p: LanPort) => !!props.model?.portMeta[p].trunk
 function portLine(p: LanPort): string {
   const mode = spec.value.ports[p]
   const owner = ownerOf(p)
   if (mode === 'untagged') return owner === 'Home' ? 'Leaves Home: whatever is plugged in joins this network' : `Moves here from ${owner}`
-  if (mode === 'tagged') return `Stays on ${owner}, and carries this network as VLAN ${spec.value.vid ?? '?'} for a switch or access point`
-  return `On ${owner}`
+  if (mode === 'tagged') return trunk(p) ? `Trunk: carries every network tagged, this one as VLAN ${spec.value.vid ?? '?'}` : `Stays on ${owner}, and carries this network as VLAN ${spec.value.vid ?? '?'}`
+  return trunk(p) ? `Trunk port: leaving this network out makes it an ordinary port` : `On ${owner}`
 }
-const anyTagged = computed(() => LAN_PORTS.some((p) => spec.value.ports[p] === 'tagged'))
+// The VLAN ID follows the range (192.168.90 -> 90, or a free one when that
+// is taken) until it is typed in by hand: always for a network being made,
+// and for an existing one while its ID is its range's own. A fresh spec
+// (another network) starts over.
+const autoVid = ref(false)
+watch(
+  () => spec.value,
+  (sp) => (autoVid.value = !!props.fresh || (sp.vid != null && sp.vid === vidForPrefix(sp.prefix))),
+  { immediate: true },
+)
+const otherVids = computed(() => {
+  const m = props.model
+  if (!m) return []
+  const sugg = suggestedVids(m)
+  return m.networks.filter((n) => n.id !== spec.value.id).flatMap((n) => (n.vid != null ? [n.vid] : n.id in sugg ? [sugg[n.id]!] : []))
+})
+watch(
+  () => spec.value.prefix,
+  (now) => {
+    if (autoVid.value && vidForPrefix(now) != null) spec.value.vid = pickVid(now, otherVids.value)
+  },
+)
 const vidText = computed({
   get: () => (spec.value.vid == null ? '' : String(spec.value.vid)),
-  set: (v: string) => (spec.value.vid = v.trim() === '' ? null : Number(v)),
+  set: (v: string) => {
+    autoVid.value = false
+    spec.value.vid = v.trim() === '' ? null : Number(v)
+  },
 })
 
 function toggleRadio(name: string): void {
@@ -85,6 +112,16 @@ function setCompat(on: boolean): void {
         hide-details="auto"
         :error-messages="errors.prefix || undefined"
         :hint="`The router is ${spec.prefix}.1, devices get ${spec.prefix}.100 – .249`"
+        persistent-hint
+      />
+      <v-text-field
+        v-if="!compact"
+        v-model="vidText"
+        label="VLAN ID"
+        inputmode="numeric"
+        hide-details="auto"
+        :error-messages="errors.vid || undefined"
+        hint="Use the same ID on a switch or access point"
         persistent-hint
       />
     </div>
@@ -142,7 +179,7 @@ function setCompat(on: boolean): void {
         <HkIcon name="ethernet" :size="20" />
         <div class="d-flex flex-column flex-grow-1">
           <span class="hk-nf__title">Wired ports</span>
-          <span class="hk-label">Untagged: the port joins this network. Tagged: it stays on its network and carries this one as a VLAN too.</span>
+          <span class="hk-label">Untagged: the port's own network. Tagged: it keeps its network and carries this one as VLAN {{ spec.vid ?? '?' }} too, for a managed switch or access point.</span>
         </div>
       </div>
       <div v-for="p in LAN_PORTS" :key="p" class="hk-nf__port">
@@ -152,17 +189,7 @@ function setCompat(on: boolean): void {
         </div>
         <SegmentedButton v-model="spec.ports[p]" :options="PORT_OPTS" :label="`LAN ${p.slice(3)}`" class="hk-nf__seg" />
       </div>
-      <v-text-field
-        v-if="anyTagged || spec.vid != null"
-        v-model="vidText"
-        label="VLAN ID"
-        inputmode="numeric"
-        hide-details="auto"
-        style="max-width: 200px"
-        :error-messages="errors.vid || undefined"
-        hint="2 – 4094; set the same on your switch or access point"
-        persistent-hint
-      />
+      <div v-if="compact && errors.vid" class="text-error" style="font-size: 13px">{{ errors.vid }}</div>
       <div v-if="errors.ports" class="text-error" style="font-size: 13px">{{ errors.ports }}</div>
     </section>
 
@@ -251,7 +278,7 @@ function setCompat(on: boolean): void {
 }
 .hk-nf__row {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   align-items: start;
   gap: 12px;
 }

@@ -3,20 +3,28 @@ import { computed, onMounted, ref } from 'vue'
 import PageHeader from '@/components/PageHeader.vue'
 import HkIcon from '@/components/icons/HkIcon.vue'
 import NetworkDialog from '@/components/networks/NetworkDialog.vue'
+import PortDialog from '@/components/networks/PortDialog.vue'
 import { loadNetworks, removeNetwork, type NetworksData } from '@/api/networks'
 import { useAction } from '@/composables/action'
 import { useConfirm } from '@/composables/confirm'
-import { KIND_INFO, LAN_PORTS, movesPorts, type LanPort, type NetworkSpec } from '@/utils/networks'
+import { HOME_VID, KIND_INFO, LAN_PORTS, movesPorts, type LanPort, type NetworkSpec } from '@/utils/networks'
 
-// Networks: Home plus the networks made here (guests, smart home, ...), each
-// its own bridge, subnet, firewall zone and Wi-Fi, on LAN ports untagged or
-// as 802.1Q VLANs - the layout this router's NSS forwards in hardware. The
-// ports card shows which network each port carries. Loaded on open and
-// after each change (not polled: a refresh would close a dialog mid-edit).
+// Networks: Home (untagged VLAN 1) plus the networks made here (guests,
+// smart home, ...), each a VLAN with its own subnet, firewall zone and
+// Wi-Fi, carried on LAN ports untagged or as 802.1Q tags - the layout this
+// router's NSS forwards in hardware. The ports card shows what each port
+// carries and opens its VLAN settings. Loaded on open and after each change
+// (not polled: a refresh would close a dialog mid-edit).
 const data = ref<NetworksData | null>(null)
 const error = ref('')
 const dialog = ref(false)
 const editing = ref<NetworkSpec | null>(null)
+const portDialog = ref(false)
+const portEditing = ref<LanPort | null>(null)
+function editPort(p: LanPort): void {
+  portEditing.value = p
+  portDialog.value = true
+}
 const { busy, run } = useAction()
 const { ask } = useConfirm()
 
@@ -58,7 +66,7 @@ const ports = computed(() =>
           ? { id: 'lan', label: 'Home' }
           : null
     const tagged = (m?.networks ?? []).filter((n) => n.ports[p] === 'tagged').map((n) => ({ id: n.id, label: n.label, vid: n.vid }))
-    return { port: p, untagged, tagged }
+    return { port: p, untagged, tagged, trunk: !!m?.portMeta[p].trunk, foreign: !!foreign }
   }),
 )
 
@@ -72,7 +80,7 @@ function portsLine(n: NetworkSpec): string {
   const t = LAN_PORTS.filter((p) => n.ports[p] === 'tagged').map((p: LanPort) => `LAN ${p.slice(3)}`)
   const parts = []
   if (u.length) parts.push(u.join(', '))
-  if (t.length) parts.push(`VLAN ${n.vid} on ${t.join(', ')}`)
+  if (t.length) parts.push(`tagged on ${t.join(', ')}`)
   return parts.join(' · ') || 'No wired ports'
 }
 
@@ -116,15 +124,23 @@ async function remove(n: NetworkSpec): Promise<void> {
     <section class="hk-card" aria-label="Ports">
       <div class="d-flex align-center ga-3">
         <h2 class="hk-h2 flex-grow-1">Ports</h2>
-        <span class="hk-label">Untagged network · tagged VLANs</span>
+        <span class="hk-label">Untagged network · tagged VLANs · tap a port to change it</span>
       </div>
       <div class="hk-ports">
-        <div v-for="p in ports" :key="p.port" class="hk-port">
-          <span class="hk-port__name">LAN {{ p.port.slice(3) }}</span>
+        <button
+          v-for="p in ports"
+          :key="p.port"
+          type="button"
+          class="hk-port hk-port--btn"
+          :disabled="p.foreign"
+          :aria-label="`LAN ${p.port.slice(3)} VLAN settings`"
+          @click="editPort(p.port)"
+        >
+          <span class="hk-port__name">LAN {{ p.port.slice(3) }}<span v-if="p.trunk" class="hk-port__trunk">Trunk</span></span>
           <span v-if="p.untagged" class="hk-port__net"><span class="hk-dot" :style="{ background: p.untagged.id ? colorOf(p.untagged.id) : 'rgb(var(--v-theme-outline))' }" />{{ p.untagged.label }}</span>
-          <span v-else class="hk-port__net text-muted">Not used</span>
+          <span v-else class="hk-port__net text-muted">No untagged network</span>
           <span v-for="t in p.tagged" :key="t.id" class="hk-port__vlan"><span class="hk-dot" :style="{ background: colorOf(t.id) }" />VLAN {{ t.vid }} · {{ t.label }}</span>
-        </div>
+        </button>
         <div class="hk-port hk-port--wan">
           <span class="hk-port__name">WAN</span>
           <span class="hk-port__net"><HkIcon name="internet" :size="16" />Internet</span>
@@ -144,6 +160,7 @@ async function remove(n: NetworkSpec): Promise<void> {
           <span class="hk-chip hk-chip--tonal">{{ nDevices(data.clients.lan ?? 0) }}</span>
         </div>
         <div class="hk-net__facts">
+          <span><HkIcon name="networks" :size="16" />VLAN {{ HOME_VID }} · untagged</span>
           <span><HkIcon name="wifi" :size="16" />{{ homeSsids || 'No Wi-Fi' }}</span>
           <span><HkIcon name="ethernet" :size="16" />{{ model.home.ports.map((p) => `LAN ${p.slice(3)}`).join(', ') || 'No wired ports' }}</span>
           <span><HkIcon name="internet" :size="16" />Internet, the router and every network it may reach</span>
@@ -163,6 +180,7 @@ async function remove(n: NetworkSpec): Promise<void> {
           <span class="hk-chip hk-chip--tonal">{{ nDevices(data.clients[n.id] ?? 0) }}</span>
         </div>
         <div class="hk-net__facts">
+          <span><HkIcon name="networks" :size="16" />{{ n.vid != null ? `VLAN ${n.vid}` : 'VLAN not set yet: edit to give it one' }}</span>
           <span><HkIcon name="wifi" :size="16" />{{ n.wifi.enabled ? `${n.wifi.ssid} · ${bandsOf(n.wifi.radios)}` : 'No Wi-Fi' }}</span>
           <span><HkIcon name="ethernet" :size="16" />{{ portsLine(n) }}</span>
         </div>
@@ -190,8 +208,8 @@ async function remove(n: NetworkSpec): Promise<void> {
     <section class="hk-card" aria-label="Good to know" style="gap: 8px">
       <h2 class="hk-h2">Good to know</h2>
       <ul class="hk-notes">
-        <li>Everything here runs in the router’s network hardware: separate networks and VLANs cost no speed.</li>
-        <li>Tagged ports carry a network as a VLAN for a managed switch or access point; set the same VLAN ID there.</li>
+        <li>Every network is a VLAN; Home is VLAN 1, untagged. It all runs in the router’s network hardware, so separate networks cost no speed.</li>
+        <li>A port carries one network untagged and any others tagged. Make a port a trunk to carry every network to a managed switch or access point, and set the same VLAN IDs there.</li>
         <li>Mesh satellites carry Home only. Extra networks reach devices on this router’s ports and Wi-Fi.</li>
         <li>Blocking access affects new connections; ones already open keep going until they end.</li>
       </ul>
@@ -202,6 +220,7 @@ async function remove(n: NetworkSpec): Promise<void> {
   </div>
 
   <NetworkDialog v-if="data" v-model="dialog" :data="data" :edit="editing" @saved="afterChange" />
+  <PortDialog v-if="data" v-model="portDialog" :data="data" :port="portEditing" @saved="afterChange" />
 </template>
 
 <style scoped>
@@ -218,6 +237,32 @@ async function remove(n: NetworkSpec): Promise<void> {
   border-radius: 16px;
   background: rgb(var(--v-theme-surface-container-lowest));
   min-width: 0;
+}
+.hk-port--btn {
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.hk-port--btn:hover:not(:disabled) {
+  background: rgb(var(--v-theme-secondary-container), 0.5);
+}
+.hk-port--btn:focus-visible {
+  outline: 3px solid rgb(var(--v-theme-secondary));
+  outline-offset: 2px;
+}
+.hk-port--btn:disabled {
+  cursor: default;
+}
+.hk-port__trunk {
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgb(var(--v-theme-tertiary-container));
+  color: rgb(var(--v-theme-on-tertiary-container));
 }
 .hk-port--wan {
   background: rgb(var(--v-theme-surface-container-low));

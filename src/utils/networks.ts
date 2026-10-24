@@ -1,15 +1,22 @@
-// Networks: extra LANs beside Home, each with its own bridge, subnet, DHCP
+// Networks: extra LANs beside Home, each a VLAN with its own subnet, DHCP
 // pool, firewall zone and (optionally) Wi-Fi - pure, so it is tested. The
 // API (api/networks.ts) reads the router's uci into a Snapshot, asks this
 // what a change means, and stages the resulting operations.
 //
-// The model is the one the AW1000's NSS offloads (see the Phase 0 tests in
-// the feed's notes): every network is a plain Linux bridge; a LAN port joins
-// it untagged (`lan3`, moved out of Home) or tagged (`lan3.30`, an 802.1Q
-// sub-interface, so the port can stay in Home untagged at the same time).
-// Bridge VLAN filtering (`vlan_filtering`, `bridge-vlan`, `lan1:t`) has no
-// hardware path on this router and breaks NSS Wi-Fi offload, so nothing here
-// ever writes it - buildOps() refuses to.
+// Every network has a VLAN ID (by default the subnet's third octet:
+// 192.168.90.0/24 is VLAN 90); Home is the untagged VLAN 1. On the wire a
+// LAN port carries a network untagged (`lan3`, its access network) or
+// tagged (`lan3.90`, an 802.1Q sub-interface), and a port can carry one
+// untagged and any number tagged - a trunk to a managed switch or access
+// point. On the router each network is a bridge joining those members and
+// its Wi-Fi, which is the layout the AW1000's NSS offloads (see the Phase 0
+// tests in the feed's notes). Bridge VLAN filtering (`vlan_filtering`,
+// `bridge-vlan`, `lan1:t`) has no hardware path on this router and breaks
+// NSS Wi-Fi offload, so nothing here ever writes it - assertSafe() refuses.
+//
+// Ports have a profile beside their memberships (hikariui port_<lanN>):
+// `trunk` carries every network tagged, new ones included, and `native none`
+// leaves the port with no untagged network rather than back on Home.
 //
 // Section names: everything a network owns is named after it, so editing and
 // removing find exactly what was made:
@@ -18,7 +25,7 @@
 //   firewall  zone hikari_net_<id> (named <id>), rules hikari_net_<id>_dhcp
 //             / _dns / _ntp, forwardings hikari_fwd_<src>__<dst>
 //   wireless  hikari_net_<id>_<radio>
-//   hikariui  net_<id>: label, kind, the IoT choices
+//   hikariui  net_<id>: label, kind, vid, the IoT choices; port_<lanN>
 // The guest network api/guest.ts made before this existed keeps its
 // hikari_guest* names (legacy), so it shows up here as one more network.
 
@@ -75,7 +82,7 @@ export interface NetworkSpec {
   kind: NetKind
   /** first three octets, e.g. "192.168.90"; the router is .1 */
   prefix: string
-  /** 802.1Q ID used on tagged ports */
+  /** 802.1Q VLAN ID (2-4094; Home is 1). null only on a network made before networks had one. */
   vid: number | null
   ports: Record<LanPort, PortMode>
   wifi: NetworkWifi
@@ -99,12 +106,22 @@ export interface ForeignBridge {
   ports: string[]
 }
 
+/** A port's profile: carries every network tagged; or no untagged network at all. */
+export interface PortMeta {
+  trunk: boolean
+  noNative: boolean
+}
+
 export interface Model {
   /** Home (br-lan): the plain ports in it */
   home: { ports: LanPort[]; section: string | null; prefix: string | null }
   networks: NetworkSpec[]
   foreign: ForeignBridge[]
+  portMeta: Record<LanPort, PortMeta>
 }
+
+/** Home's VLAN: untagged on its ports, never used by a network. */
+export const HOME_VID = 1
 
 // ---------------------------------------------------------------- helpers --
 
@@ -260,8 +277,16 @@ export function parseModel(s: Snapshot): Model {
   const foreign = Object.values(s.network)
     .filter((d) => d['.type'] === 'device' && d.type === 'bridge' && !ours.has(String(d.name)))
     .map((d) => ({ name: String(d.name), ports: list(d.ports) }))
-  return { home, networks, foreign }
+  const portMeta = Object.fromEntries(
+    LAN_PORTS.map((p) => {
+      const m = s.hikariui[portSection(p)]
+      return [p, { trunk: m?.trunk === '1', noNative: m?.native === 'none' }]
+    }),
+  ) as Record<LanPort, PortMeta>
+  return { home, networks, foreign, portMeta }
 }
+
+const portSection = (p: LanPort) => `port_${p}`
 
 // ---------------------------------------------------------------- presets --
 
@@ -278,6 +303,9 @@ export interface PresetContext {
   radios: { name: string; band: string; disabled?: boolean }[]
   prefix: string
   password: string
+  vid: number
+  /** trunk ports: a new network starts tagged on them */
+  trunkPorts?: LanPort[]
 }
 
 export function preset(kind: NetKind, id: string, ctx: PresetContext): NetworkSpec {
@@ -289,8 +317,8 @@ export function preset(kind: NetKind, id: string, ctx: PresetContext): NetworkSp
     label: kind === 'iot' ? 'Smart home' : label,
     kind,
     prefix: ctx.prefix,
-    vid: null,
-    ports: noPorts(),
+    vid: ctx.vid,
+    ports: { ...noPorts(), ...Object.fromEntries((ctx.trunkPorts ?? []).map((p) => [p, 'tagged' as const])) },
     wifi: {
       enabled: true,
       ssid: `${ctx.hostname} ${kind === 'iot' ? 'IoT' : kind === 'guest' ? 'Guest' : kind === 'trusted' ? 'Trusted' : 'Network'}`,
@@ -331,6 +359,35 @@ export function freeId(kind: NetKind, taken: Set<string>): string {
 
 /** No guest network yet: a new one can be the classic "guest" (legacy names). */
 export const isLegacyGuestFree = (s: Snapshot) => !s.network.guest && !s.firewall.hikari_guest
+
+/** The VLAN ID a range suggests: 192.168.90 -> 90 (10.40.0 -> 40); null when it can't. */
+export function vidForPrefix(prefix: string): number | null {
+  const o = prefix.split('.').map(Number)
+  const v = o[2] ? o[2] : o[1]
+  return Number.isInteger(v) && v! >= 2 && v! <= 4094 ? v! : null
+}
+
+/** A free VLAN ID for a network on this range: the range's own, else the first free from 10. */
+export function pickVid(prefix: string, used: Iterable<number>): number {
+  const u = new Set(used)
+  const own = vidForPrefix(prefix)
+  if (own != null && !u.has(own)) return own
+  for (let v = 10; v <= 4094; v++) if (!u.has(v)) return v
+  return 4094
+}
+
+/** IDs for networks made before networks had one, clear of each other and of those that have one. */
+export function suggestedVids(model: Model): Record<string, number> {
+  const used = new Set(model.networks.flatMap((n) => (n.vid != null ? [n.vid] : [])))
+  const out: Record<string, number> = {}
+  for (const n of model.networks) {
+    if (n.vid != null) continue
+    const v = pickVid(n.prefix, used)
+    used.add(v)
+    out[n.id] = v
+  }
+  return out
+}
 
 /** The first free 192.168.x.0/24 from 89 upwards. */
 export function pickFreePrefix(used: Iterable<string>): string {
@@ -375,11 +432,9 @@ export function validate(spec: NetworkSpec, model: Model, ctx: ValidateContext):
   if (!label || label.length > 32) e.label = 'A name of 1 to 32 characters'
   if (!privatePrefix(spec.prefix)) e.prefix = 'A private range, like 192.168.90'
   else if (ctx.usedPrefixes.has(spec.prefix)) e.prefix = 'Another network uses this range'
-  const tagged = LAN_PORTS.filter((p) => spec.ports[p] === 'tagged')
-  if (tagged.length || spec.vid != null) {
-    if (spec.vid == null || !Number.isInteger(spec.vid) || spec.vid < 2 || spec.vid > 4094) e.vid = 'A VLAN ID from 2 to 4094'
-    else if (ctx.usedVids.has(spec.vid)) e.vid = 'Another network uses this VLAN ID'
-  }
+  if (spec.vid === HOME_VID) e.vid = 'VLAN 1 is Home'
+  else if (spec.vid == null || !Number.isInteger(spec.vid) || spec.vid < 2 || spec.vid > 4094) e.vid = 'A VLAN ID from 2 to 4094'
+  else if (ctx.usedVids.has(spec.vid)) e.vid = 'Another network uses this VLAN ID'
   const next = homePortsAfter(model, spec)
   const foreign = LAN_PORTS.filter((p) => spec.ports[p] === 'untagged' && model.foreign.some((b) => b.ports.includes(p)))
   if (foreign.length) e.ports = `${foreign.join(', ')} belongs to a bridge made elsewhere (${model.foreign.find((b) => b.ports.includes(foreign[0]!))!.name})`
@@ -406,8 +461,9 @@ export function homePortsAfter(model: Model, spec: NetworkSpec | null, removing?
     if (owner) return false
     if (model.foreign.some((b) => b.ports.includes(p))) return model.home.ports.includes(p)
     // Not untagged anywhere else: it is Home's (a port released by a network
-    // goes back to Home rather than being left in no bridge at all).
-    return true
+    // goes back to Home rather than being left in no bridge at all), unless
+    // its profile says it has no untagged network.
+    return !model.portMeta[p].noNative
   })
 }
 
@@ -430,6 +486,7 @@ const MANAGED: Record<string, string[]> = {
   forwarding: ['src', 'dest'],
   'wifi-iface': ['device', 'mode', 'network', 'ssid', 'encryption', 'key', 'isolate', 'ieee80211w', 'ieee80211r', 'disassoc_low_ack', 'max_inactivity'],
   network: ['label', 'kind', 'vid', 'iot_compat', 'iot_keepawake', 'iot_longleases', 'iot_ntp'],
+  port: ['trunk', 'native'],
 }
 
 const same = (a: unknown, b: unknown) => JSON.stringify(Array.isArray(a) ? a.map(String) : String(a ?? '')) === JSON.stringify(Array.isArray(b) ? b.map(String) : String(b ?? ''))
@@ -563,8 +620,24 @@ export function buildSaveOps(s: Snapshot, model: Model, spec: NetworkSpec, extra
     sync(ops, s[config][section], config, section, d.type, d.values)
   }
   syncPorts(s, model, ops, spec)
+  // A trunk port this network is taken off isn't carrying every network any
+  // more; a port it takes untagged has an untagged network again.
+  const meta = Object.fromEntries(
+    LAN_PORTS.map((p) => [p, { trunk: model.portMeta[p].trunk && spec.ports[p] !== 'off', noNative: model.portMeta[p].noNative && spec.ports[p] !== 'untagged' }]),
+  ) as Record<LanPort, PortMeta>
+  syncPortMeta(s, ops, meta)
   if (extras.ntpServer) ops.push({ op: 'set', config: 'system', section: 'ntp', values: { enable_server: '1' } })
   return assertSafe(ops)
+}
+
+/** hikariui port_<lanN> as `meta` says: present only while a port has a profile. */
+function syncPortMeta(s: Snapshot, ops: Op[], meta: Record<LanPort, PortMeta>): void {
+  for (const p of LAN_PORTS) {
+    const sec = portSection(p)
+    const want = { trunk: meta[p].trunk ? '1' : '', native: meta[p].noNative ? 'none' : '' }
+    if (want.trunk || want.native) sync(ops, s.hikariui[sec], 'hikariui', sec, 'port', want)
+    else if (s.hikariui[sec]) ops.push({ op: 'delete', config: 'hikariui', section: sec })
+  }
 }
 
 /** Operations that remove a network; its untagged ports go back to Home. */
@@ -576,6 +649,78 @@ export function buildRemoveOps(s: Snapshot, model: Model, id: string): Op[] {
     return { op: 'delete' as const, config, section }
   })
   syncPorts(s, model, ops, null, id)
+  return assertSafe(ops)
+}
+
+// ------------------------------------------------------------ port profiles --
+
+/**
+ * What one port carries: its untagged network ("lan" is Home, "none" is
+ * nothing), the networks it carries tagged, and whether it is a trunk (every
+ * network tagged, new ones included; `tagged` is then ignored).
+ */
+export interface PortProfile {
+  native: string
+  tagged: string[]
+  trunk: boolean
+}
+
+export function portProfile(model: Model, port: LanPort): PortProfile {
+  const owner = model.networks.find((n) => n.ports[port] === 'untagged')
+  const native = owner ? owner.id : model.home.ports.includes(port) ? 'lan' : 'none'
+  return {
+    native,
+    tagged: model.networks.filter((n) => n.ports[port] === 'tagged').map((n) => n.id),
+    trunk: model.portMeta[port].trunk,
+  }
+}
+
+/** The model once `port` follows `profile`. */
+function withProfile(model: Model, port: LanPort, profile: PortProfile): Model {
+  const networks = model.networks.map((n) => {
+    const mode: PortMode = profile.native === n.id ? 'untagged' : profile.trunk || profile.tagged.includes(n.id) ? 'tagged' : 'off'
+    return mode === n.ports[port] ? n : { ...n, ports: { ...n.ports, [port]: mode } }
+  })
+  const portMeta = { ...model.portMeta, [port]: { trunk: profile.trunk, noNative: profile.native === 'none' } }
+  return { ...model, networks, portMeta }
+}
+
+/** Why a port can't take this profile, or null. */
+export function validatePort(model: Model, port: LanPort, profile: PortProfile): string | null {
+  const foreign = model.foreign.find((b) => b.ports.includes(port))
+  if (foreign) return `This port belongs to a bridge made elsewhere (${foreign.name})`
+  if (profile.native !== 'lan' && profile.native !== 'none' && !model.networks.some((n) => n.id === profile.native)) return 'That network no longer exists'
+  if (!homePortsAfter(withProfile(model, port, profile), null).length) return 'Keep at least one port on your Home network'
+  return null
+}
+
+/**
+ * Operations that make `port` carry what `profile` says: its membership in
+ * Home and in every network's bridge, and its profile. `vids` gives an ID to
+ * a network that has none yet (made before networks had one) and is now
+ * carried tagged; it is saved with the network.
+ */
+export function buildPortOps(s: Snapshot, model: Model, port: LanPort, profile: PortProfile, vids: Record<string, number> = {}): Op[] {
+  const ops: Op[] = []
+  const next = withProfile(model, port, profile)
+  for (const n of next.networks) {
+    const before = model.networks.find((x) => x.id === n.id)!
+    if (before.ports[port] === n.ports[port]) continue
+    const vid = n.vid ?? vids[n.id] ?? null
+    if (n.ports[port] === 'tagged' && vid == null) throw new Error(`${n.label} has no VLAN ID`)
+    const nm = names(n.id, n.legacy)
+    ops.push({ op: 'set', config: 'network', section: nm.dev, values: { ports: portsOf({ ...n, vid }) } })
+    if (n.vid == null && vid != null) {
+      if (s.hikariui[nm.meta]) ops.push({ op: 'set', config: 'hikariui', section: nm.meta, values: { vid: String(vid) } })
+      else ops.push({ op: 'add', config: 'hikariui', section: nm.meta, type: 'network', values: { label: n.label, kind: n.kind, vid: String(vid) } })
+    }
+  }
+  if (model.home.section) {
+    const cur = s.network[model.home.section]!
+    const want = [...homePortsAfter(next, null), ...list(cur.ports).filter((p) => !isLan(p))]
+    if (!same(list(cur.ports), want)) ops.push({ op: 'set', config: 'network', section: model.home.section, values: { ports: want } })
+  }
+  syncPortMeta(s, ops, next.portMeta)
   return assertSafe(ops)
 }
 
