@@ -94,6 +94,9 @@ const facts = computed(() => {
           <dd :class="{ 'font-weight-bold': f.strong }">{{ f.v }}</dd>
         </div>
       </dl>
+      <div class="d-flex justify-end">
+        <v-btn to="/engineering" variant="tonal" height="40"><HkIcon name="antenna" :size="18" class="mr-2" />Engineering mode</v-btn>
+      </div>
     </template>
     <div v-else-if="modem" class="py-6">
       <div class="hk-display" style="font-size: 32px">{{ modem.sim !== 'ready' ? 'No SIM ready' : 'No signal' }}</div>

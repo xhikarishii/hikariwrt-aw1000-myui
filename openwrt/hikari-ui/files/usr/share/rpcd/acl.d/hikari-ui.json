@@ -45,7 +45,9 @@
 					"profileinfo",
 					"ipv6info",
 					"routerstatus",
-					"scanstatus"
+					"scanstatus",
+					"engread",
+					"engseries"
 				],
 				"luci.aw1000-speedtest": [
 					"status",
@@ -135,6 +137,9 @@
 				],
 				"luci.aw1000-modem": [
 					"refresh",
+					"engstart",
+					"engstop",
+					"engmark",
 					"setbands",
 					"setmode",
 					"setlock",

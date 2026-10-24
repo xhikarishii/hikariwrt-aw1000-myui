@@ -45,8 +45,10 @@ const props = withDefaults(
     fmtVal?: (v: number) => string
     label: string
     empty?: string
+    /** Vertical markers, e.g. "position A" in Engineering mode. */
+    marks?: { t: number; label: string }[]
   }>(),
-  { height: 180, yMax: undefined, yMin: undefined, zones: () => [], fmtY: (v: number) => String(v), fmtVal: undefined, empty: 'No data for this period yet' },
+  { height: 180, yMax: undefined, yMin: undefined, zones: () => [], fmtY: (v: number) => String(v), fmtVal: undefined, empty: 'No data for this period yet', marks: () => [] },
 )
 
 const box = ref<HTMLElement | null>(null)
@@ -139,8 +141,28 @@ function onMove(e: PointerEvent): void {
   const rect = svg.getBoundingClientRect()
   const px = ((e.clientX - rect.left) * width.value) / rect.width
   const t = props.from + ((px - PAD.l) / innerW.value) * (props.to - props.from) - half.value
-  hover.value = Math.min(props.ts.length - 1, Math.max(0, Math.round((t - props.ts[0]) / (props.step || 1))))
+  hover.value = nearest(t)
 }
+
+// The reading closest to t: a binary search, because readings taken every few
+// seconds are not evenly spaced the way history buckets are.
+function nearest(t: number): number {
+  const a = props.ts
+  let lo = 0
+  let hi = a.length - 1
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if (a[mid]! < t) lo = mid + 1
+    else hi = mid
+  }
+  return lo > 0 && Math.abs(a[lo - 1]! - t) <= Math.abs(a[lo]! - t) ? lo - 1 : lo
+}
+
+const markLines = computed(() =>
+  props.marks
+    .filter((m) => m.t >= props.from && m.t <= props.to)
+    .map((m) => ({ ...m, x: PAD.l + ((m.t - props.from) / (props.to - props.from || 1)) * innerW.value })),
+)
 
 const tip = computed(() => {
   const i = hover.value
@@ -183,6 +205,11 @@ const tip = computed(() => {
         <path v-for="(d, j) in p.areas" :key="`a${j}`" class="hk-lc__area" :fill="p.s.color" :d="d" />
         <path v-for="(d, j) in p.lines" :key="`l${j}`" class="hk-lc__line" :class="{ 'is-dash': p.s.dash }" :stroke="p.s.color" :d="d" />
         <circle v-for="(c, j) in p.dots" :key="`d${j}`" :cx="c.cx" :cy="c.cy" r="2.5" :fill="p.s.color" />
+      </g>
+
+      <g v-for="m in markLines" :key="`m${m.t}${m.label}`">
+        <line class="hk-lc__mark" :x1="m.x" :x2="m.x" :y1="PAD.t" :y2="PAD.t + innerH" />
+        <text class="hk-lc__marklabel" :x="m.x + 4" :y="PAD.t + 11">{{ m.label }}</text>
       </g>
 
       <template v-if="tip">
@@ -251,6 +278,16 @@ const tip = computed(() => {
 }
 .hk-lc__zone {
   opacity: 0.1;
+}
+.hk-lc__mark {
+  stroke: rgb(var(--v-theme-secondary));
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+}
+.hk-lc__marklabel {
+  fill: rgb(var(--v-theme-secondary));
+  font-size: 11px;
+  font-weight: 600;
 }
 .hk-lc__cross {
   stroke: rgb(var(--v-theme-on-surface-muted));

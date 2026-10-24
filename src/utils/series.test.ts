@@ -48,6 +48,7 @@ describe('bucketTime', () => {
     const t = new Date(2026, 8, 27, 14, 0).getTime() / 1000
     expect(bucketTime(t, 1200)).toBe('Sep 27, 14:00 – 14:20')
     expect(bucketTime(t, 60)).toBe('Sep 27, 14:00')
+    expect(bucketTime(t + 7, 2)).toBe('Sep 27, 14:00:07')
     expect(bucketTime(t, 86400)).toBe('Sep 27')
   })
 })
@@ -105,5 +106,15 @@ describe('units', () => {
   it('prints loss', () => {
     expect(pct(0)).toBe('0.0%')
     expect(pct(12.4)).toBe('12%')
+  })
+})
+
+describe('timeTicks at seconds scale', () => {
+  it('labels a few minutes of readings with seconds steps', () => {
+    const from = new Date(2026, 8, 27, 14, 0, 0).getTime() / 1000
+    const ticks = timeTicks(from, from + 120, 6)
+    expect(ticks.length).toBeGreaterThanOrEqual(4)
+    expect(ticks[1]!.t - ticks[0]!.t).toBe(30)
+    expect(ticks[1]!.label).toBe('14:00:30')
   })
 })

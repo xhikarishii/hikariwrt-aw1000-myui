@@ -9,6 +9,7 @@ import { useSession } from '@/stores/session'
 const BUILT: Record<string, () => Promise<unknown>> = {
   home: () => import('@/views/HomeView.vue'),
   cellular: () => import('@/views/CellularView.vue'),
+  engineering: () => import('@/views/EngineeringView.vue'),
   internet: () => import('@/views/InternetView.vue'),
   monitoring: () => import('@/views/MonitorView.vue'),
   wifi: () => import('@/views/WirelessView.vue'),

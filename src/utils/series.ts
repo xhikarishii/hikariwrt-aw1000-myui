@@ -25,7 +25,8 @@ export function niceTicks(min: number, max: number, count = 4): Ticks {
   return { min: lo, max: hi, step, ticks }
 }
 
-const TIME_STEPS = [300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400, 172800, 259200, 604800, 1209600, 2592000]
+// seconds steps first: Engineering mode draws a few minutes of 2 s readings
+const TIME_STEPS = [10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400, 172800, 259200, 604800, 1209600, 2592000]
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const pad = (n: number) => String(n).padStart(2, '0')
 
@@ -51,6 +52,7 @@ export function timeTicks(from: number, to: number, max: number): { t: number; l
 function tickLabel(t: number, step: number): string {
   const d = new Date(t * 1000)
   if (step >= 86400 || (step >= 3600 && d.getHours() === 0 && d.getMinutes() === 0)) return `${MONTHS[d.getMonth()]} ${d.getDate()}`
+  if (step < 60) return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
   return `${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
@@ -58,6 +60,8 @@ function tickLabel(t: number, step: number): string {
 export function bucketTime(t: number, step?: number): string {
   const a = new Date(t * 1000)
   const s = `${MONTHS[a.getMonth()]} ${a.getDate()}, ${pad(a.getHours())}:${pad(a.getMinutes())}`
+  // a reading every few seconds is told apart by its seconds
+  if (step && step < 60) return `${s}:${pad(a.getSeconds())}`
   if (!step || step <= 60) return s
   if (step >= 86400) return `${MONTHS[a.getMonth()]} ${a.getDate()}`
   const b = new Date((t + step) * 1000)
